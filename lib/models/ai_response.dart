@@ -9,6 +9,9 @@ class AiDiagnosticResponse {
     this.subScores = const {},
     this.urgencyNote,
     this.rawText,
+    this.provider = 'local',
+    this.isFallback = false,
+    this.errorCode,
   });
 
   final String summary;
@@ -27,6 +30,9 @@ class AiDiagnosticResponse {
 
   final String? urgencyNote;
   final String? rawText;
+  final String provider;
+  final bool isFallback;
+  final String? errorCode;
 
   String get healthLabel {
     if (healthScore >= 8) return 'Good';
@@ -45,6 +51,9 @@ class AiDiagnosticResponse {
         'recommendations': recommendations,
         'sub_scores': subScores,
         'urgency_note': urgencyNote,
+        'provider': provider,
+        'is_fallback': isFallback,
+        'error_code': errorCode,
       };
 
   factory AiDiagnosticResponse.fromJson(Map<String, dynamic> j) =>
@@ -58,6 +67,9 @@ class AiDiagnosticResponse {
             (j['recommendations'] as List?)?.cast<String>() ?? [],
         subScores: _parseSubScores(j['sub_scores']),
         urgencyNote: j['urgency_note'] as String?,
+        provider: j['provider'] as String? ?? 'local',
+        isFallback: j['is_fallback'] as bool? ?? false,
+        errorCode: j['error_code'] as String?,
       );
 
   static Map<String, double> _parseSubScores(dynamic raw) {
@@ -85,5 +97,8 @@ class AiDiagnosticResponse {
         possibleCauses: const ['Unable to parse structured response'],
         recommendations: const ['Please consult a mechanic for verification'],
         rawText: rawText,
+        provider: 'local',
+        isFallback: true,
+        errorCode: 'parse_failed',
       );
 }

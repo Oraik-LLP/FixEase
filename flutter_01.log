@@ -1,0 +1,95 @@
+Flutter crash report.
+Please report a bug at https://github.com/flutter/flutter/issues.
+
+## command
+
+flutter --quiet assemble --no-version-check --depfile C:\Users\manna\Documents\Oraik_Projects\2-FixEase\FixEase\build\app\intermediates\flutter\debug/flutter_build.d --output C:\Users\manna\Documents\Oraik_Projects\2-FixEase\FixEase\build\app\intermediates\flutter\debug -dTargetFile=C:\Users\manna\Documents\Oraik_Projects\2-FixEase\FixEase\lib\main.dart -dTargetPlatform=android -dBuildMode=debug -dTrackWidgetCreation=true --DartDefines=QUlfQkFDS0VORF9VUkw9aHR0cDovLzEyNy4wLjAuMTo4Nzg3,RkxVVFRFUl9WRVJTSU9OPTMuNDEuNg==,RkxVVFRFUl9DSEFOTkVMPXN0YWJsZQ==,RkxVVFRFUl9HSVRfVVJMPWh0dHBzOi8vZ2l0aHViLmNvbS9mbHV0dGVyL2ZsdXR0ZXIuZ2l0,RkxVVFRFUl9GUkFNRVdPUktfUkVWSVNJT049ZGI1MGUyMDE2OA==,RkxVVFRFUl9FTkdJTkVfUkVWSVNJT049NDI1Y2ZiNTRkMA==,RkxVVFRFUl9EQVJUX1ZFUlNJT049My4xMS40 -dFlavor= -dAndroidArchs=android-arm64 -dMinSdkVersion=24 debug_android_application
+
+## exception
+
+PathAccessException: PathAccessException: Cannot open file, path = 'C:\Users\manna\flutter\bin\cache\engine.realm' (OS Error: The process cannot access the file because it is being used by another process, errno = 32)
+
+```
+#0      _File.throwIfError (dart:io/file_impl.dart:779:7)
+#1      _File.openSync (dart:io/file_impl.dart:572:5)
+#2      _File.readAsBytesSync (dart:io/file_impl.dart:660:18)
+#3      _File.readAsStringSync (dart:io/file_impl.dart:715:18)
+#4      ForwardingFile.readAsStringSync (package:file/src/forwarding/forwarding_file.dart:99:16)
+#5      ErrorHandlingFile.readAsStringSync.<anonymous closure> (package:flutter_tools/src/base/error_handling_io.dart:212:22)
+#6      _runSync (package:flutter_tools/src/base/error_handling_io.dart:552:14)
+#7      ErrorHandlingFile.readAsStringSync (package:flutter_tools/src/base/error_handling_io.dart:211:12)
+#8      Cache.getRealmFor (package:flutter_tools/src/cache.dart:692:47)
+#9      Cache.storageRealm (package:flutter_tools/src/cache.dart:508:23)
+#10     Cache.storageBaseUrl (package:flutter_tools/src/cache.dart:531:14)
+#11     Cache._createUpdater (package:flutter_tools/src/cache.dart:230:33)
+#12     Cache._artifactUpdater (package:flutter_tools/src/cache.dart:213:49)
+#13     Cache._artifactUpdater (package:flutter_tools/src/cache.dart)
+#14     Cache.updateAll (package:flutter_tools/src/cache.dart:761:31)
+<asynchronous suspension>
+#15     FlutterCommand.verifyThenRunCommand (package:flutter_tools/src/runner/flutter_command.dart:1905:7)
+<asynchronous suspension>
+#16     FlutterCommand.run.<anonymous closure> (package:flutter_tools/src/runner/flutter_command.dart:1590:27)
+<asynchronous suspension>
+#17     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#18     CommandRunner.runCommand (package:args/command_runner.dart:212:13)
+<asynchronous suspension>
+#19     FlutterCommandRunner.runCommand.<anonymous closure> (package:flutter_tools/src/runner/flutter_command_runner.dart:496:9)
+<asynchronous suspension>
+#20     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#21     FlutterCommandRunner.runCommand (package:flutter_tools/src/runner/flutter_command_runner.dart:431:5)
+<asynchronous suspension>
+#22     FlutterCommandRunner.run.<anonymous closure> (package:flutter_tools/src/runner/flutter_command_runner.dart:307:33)
+<asynchronous suspension>
+#23     run.<anonymous closure>.<anonymous closure> (package:flutter_tools/runner.dart:104:11)
+<asynchronous suspension>
+#24     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#25     main (package:flutter_tools/executable.dart:103:3)
+<asynchronous suspension>
+```
+
+## flutter doctor
+
+```
+[✓] Flutter (Channel stable, 3.41.6, on Microsoft Windows [Version 10.0.26200.8037], locale en-IN) [852ms]
+    • Flutter version 3.41.6 on channel stable at C:\Users\manna\flutter
+    • Upstream repository https://github.com/flutter/flutter.git
+    • Framework revision db50e20168 (3 weeks ago), 2026-03-25 16:21:00 -0700
+    • Engine revision 425cfb54d0
+    • Dart version 3.11.4
+    • DevTools version 2.54.2
+    • Feature flags: enable-web, enable-linux-desktop, enable-macos-desktop, enable-windows-desktop, enable-android, enable-ios, cli-animations, enable-native-assets, omit-legacy-version-file, enable-lldb-debugging, enable-uiscene-migration
+
+[✓] Windows Version (Windows 11 or higher, 25H2, 2009) [2.4s]
+
+[✓] Android toolchain - develop for Android devices (Android SDK version 36.1.0) [8.5s]
+    • Android SDK at C:\Users\manna\AppData\Local\Android\sdk
+    • Emulator version 36.2.12.0 (build_id 14214601) (CL:N/A)
+    • Platform android-36, build-tools 36.1.0
+    • Java binary at: C:\Program Files\Android\Android Studio\jbr\bin\java
+      This is the JDK bundled with the latest Android Studio installation on this machine.
+      To manually set the JDK path, use: `flutter config --jdk-dir="path/to/jdk"`.
+    • Java version OpenJDK Runtime Environment (build 21.0.8+-14196175-b1038.72)
+    • All Android licenses accepted.
+
+[✓] Chrome - develop for the web [340ms]
+    • Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe
+
+[✓] Visual Studio - develop Windows apps (Visual Studio Build Tools 2022 17.14.6 (June 2025)) [337ms]
+    • Visual Studio at C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools
+    • Visual Studio Build Tools 2022 version 17.14.36212.18
+    • Windows 10 SDK version 10.0.26100.0
+
+[✓] Connected device (4 available) [492ms]
+    • Pixel 7a (mobile) • 33271JEHN19089 • android-arm64  • Android 16 (API 36)
+    • Windows (desktop) • windows        • windows-x64    • Microsoft Windows [Version 10.0.26200.8037]
+    • Chrome (web)      • chrome         • web-javascript • Google Chrome 146.0.7680.178
+    • Edge (web)        • edge           • web-javascript • Microsoft Edge 146.0.3856.109
+
+[✓] Network resources [1,313ms]
+    • All expected network resources are available.
+
+• No issues found!
+```

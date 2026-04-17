@@ -13,3 +13,6 @@ build/
 # Platform
 android/.gradle/
 ios/Pods/
+
+# Secrets
+.env

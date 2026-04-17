@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:camera/camera.dart';
 
 import '../../config/feature_flags.dart';
 import '../../services/gemini_live_service.dart';
@@ -20,14 +20,26 @@ class LiveDiagnoseScreen extends StatefulWidget {
 class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
   final _msgCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
-  final _picker = ImagePicker();
+  CameraController? _cameraCtrl;
   bool _checking = true;
   DeviceCapability? _capability;
 
   @override
   void initState() {
     super.initState();
+    _initCamera();
     _runChecks();
+  }
+
+  Future<void> _initCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isNotEmpty) {
+        _cameraCtrl = CameraController(cameras.first, ResolutionPreset.medium, enableAudio: false);
+        await _cameraCtrl!.initialize();
+        if (mounted) setState(() {});
+      }
+    } catch (_) {}
   }
 
   bool _disposed = false;
@@ -58,6 +70,9 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     _disposed = true;
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
+    if (_cameraCtrl != null && _cameraCtrl!.value.isInitialized) {
+      _cameraCtrl!.dispose();
+    }
     if (GeminiLiveService.instance.isActive) {
       GeminiLiveService.instance.endSession();
     }
@@ -78,14 +93,11 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
   }
 
   Future<void> _captureAndSend() async {
+    if (_cameraCtrl == null || !_cameraCtrl!.value.isInitialized) return;
     HapticFeedback.heavyImpact();
     try {
-      final xfile = await _picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 75,
-        maxWidth: 1280,
-      );
-      if (xfile == null || !mounted) return;
+      final xfile = await _cameraCtrl!.takePicture();
+      if (!mounted) return;
 
       final bytes = await xfile.readAsBytes();
       if (!mounted) return;
@@ -94,11 +106,10 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
           : 'What do you see here?';
       _msgCtrl.clear();
 
-      await GeminiLiveService.instance
-          .sendFrame(Uint8List.fromList(bytes), text);
+      GeminiLiveService.instance.sendFrame(Uint8List.fromList(bytes), text);
       _scrollToBottom();
     } catch (_) {
-      // Camera cancelled or read error — silently ignore
+      // Camera capture failed
     }
   }
 
@@ -108,7 +119,7 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     HapticFeedback.selectionClick();
     _msgCtrl.clear();
 
-    await GeminiLiveService.instance.sendText(text);
+    GeminiLiveService.instance.sendText(text);
     _scrollToBottom();
   }
 
@@ -257,11 +268,38 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
 
         _scrollToBottom();
 
-        return Column(
+        return Stack(
           children: [
-            Expanded(
-              child: msgs.isEmpty
-                  ? _buildWelcome(tt)
+            if (_cameraCtrl != null && _cameraCtrl!.value.isInitialized)
+              Positioned.fill(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: _cameraCtrl!.value.previewSize?.height ?? 1,
+                    height: _cameraCtrl!.value.previewSize?.width ?? 1,
+                    child: CameraPreview(_cameraCtrl!),
+                  ),
+                ),
+              ),
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      AppColors.background.withValues(alpha: 0.1),
+                      AppColors.background.withValues(alpha: 0.4),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Column(
+              children: [
+                Expanded(
+                  child: msgs.isEmpty
+                      ? _buildWelcome(tt)
                   : ListView.builder(
                       controller: _scrollCtrl,
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -354,7 +392,9 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                 ),
               ),
           ],
-        );
+        ),
+      ],
+    );
       },
     );
   }

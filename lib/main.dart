@@ -16,6 +16,7 @@ import 'screens/vehicle/my_vehicles_screen.dart';
 import 'services/auth_service.dart';
 import 'services/car_image_service.dart';
 import 'services/diagnostic_service.dart';
+import 'services/local_store_service.dart';
 import 'services/subscription_service.dart';
 import 'services/vehicle_service.dart';
 import 'theme/app_theme.dart';
@@ -24,6 +25,7 @@ import 'widgets/neuomorphic.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await LocalStoreService.init();
   try {
     await SupabaseConfig.init();
     AuthService.instance.init();

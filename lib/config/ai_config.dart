@@ -1,18 +1,21 @@
-/// Configuration for AI providers.
-/// Pass your key at build time:
-///   flutter run --dart-define=GEMINI_API_KEY=xxx
+/// Client-safe AI configuration.
+/// The app talks to a backend that owns Gemini credentials.
 abstract final class AiConfig {
-  static const geminiApiKey = String.fromEnvironment(
-    'GEMINI_API_KEY',
+  static const backendUrl = String.fromEnvironment(
+    'AI_BACKEND_URL',
     defaultValue: '',
   );
 
-  static bool get isConfigured => geminiApiKey.isNotEmpty;
+  static bool get isConfigured => backendUrl.isNotEmpty;
 
-  static const geminiModel = 'gemini-2.0-flash';
+  static const diagnosisModel = 'gemini-flash-latest';
+  static const liveModel = 'gemini-3.1-flash-live-preview';
 
-  static String get geminiEndpoint =>
-      'https://generativelanguage.googleapis.com/v1beta/models/$geminiModel:generateContent?key=$geminiApiKey';
-
-  static String get geminiVisionEndpoint => geminiEndpoint;
+  static Uri endpoint(String path) {
+    final base = backendUrl.endsWith('/')
+        ? backendUrl.substring(0, backendUrl.length - 1)
+        : backendUrl;
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    return Uri.parse('$base$normalizedPath');
+  }
 }

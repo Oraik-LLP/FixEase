@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-import '../config/supabase_config.dart';
+import 'local_store_service.dart';
 
 enum SubscriptionTier { free, premium, pro }
 
@@ -49,6 +49,7 @@ class PlanLimits {
 class SubscriptionService extends ChangeNotifier {
   SubscriptionService._();
   static final instance = SubscriptionService._();
+  static const _storageKey = 'subscription.v1';
 
   SubscriptionTier _tier = SubscriptionTier.free;
   int _diagnosticsThisMonth = 0;
@@ -159,34 +160,29 @@ class SubscriptionService extends ChangeNotifier {
     _resetMonthIfNeeded();
     _diagnosticsThisMonth++;
     notifyListeners();
-    _syncToRemote();
+    _persist();
   }
 
   /// Simulate a purchase — in production, this is driven by Google Play Billing callback.
   Future<bool> purchase(SubscriptionTier newTier) async {
     _tier = newTier;
     notifyListeners();
-    await _syncToRemote();
+    await _persist();
     return true;
   }
 
   Future<void> restore() async {
-    if (!SupabaseConfig.isConfigured) return;
-    try {
-      final uid = SupabaseConfig.client.auth.currentUser?.id;
-      if (uid == null) return;
-      final row = await SupabaseConfig.client
-          .from('subscriptions')
-          .select()
-          .eq('user_id', uid)
-          .maybeSingle();
-      if (row != null) {
-        _tier = SubscriptionTier.values.byName(
-            row['tier'] as String? ?? 'free');
-        _diagnosticsThisMonth = row['diagnostics_used'] as int? ?? 0;
-        notifyListeners();
-      }
-    } catch (_) {}
+    final row = LocalStoreService.readJsonMap(_storageKey);
+    if (row == null) return;
+    _tier = SubscriptionTier.values.byName(row['tier'] as String? ?? 'free');
+    _diagnosticsThisMonth = row['diagnostics_used'] as int? ?? 0;
+    final monthStartRaw = row['month_start'] as String?;
+    final parsed = monthStartRaw != null ? DateTime.tryParse(monthStartRaw) : null;
+    if (parsed != null) {
+      _monthStart = DateTime(parsed.year, parsed.month);
+    }
+    _resetMonthIfNeeded();
+    notifyListeners();
   }
 
   void _resetMonthIfNeeded() {
@@ -198,17 +194,11 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
-  Future<void> _syncToRemote() async {
-    if (!SupabaseConfig.isConfigured) return;
-    try {
-      final uid = SupabaseConfig.client.auth.currentUser?.id;
-      if (uid == null) return;
-      await SupabaseConfig.client.from('subscriptions').upsert({
-        'user_id': uid,
+  Future<void> _persist() {
+    return LocalStoreService.writeJsonMap(_storageKey, {
         'tier': _tier.name,
         'diagnostics_used': _diagnosticsThisMonth,
-        'updated_at': DateTime.now().toIso8601String(),
+        'month_start': _monthStart.toIso8601String(),
       });
-    } catch (_) {}
   }
 }

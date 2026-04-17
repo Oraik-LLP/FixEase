@@ -1,12 +1,13 @@
 import 'package:flutter/foundation.dart';
 
-import '../config/supabase_config.dart';
 import '../models/diagnostic.dart';
+import 'local_store_service.dart';
 
-/// Manages diagnostic sessions — local-first with Supabase sync.
+/// Manages diagnostic sessions on-device.
 class DiagnosticService extends ChangeNotifier {
   DiagnosticService._();
   static final instance = DiagnosticService._();
+  static const _storageKey = 'diagnostics.v1';
 
   final List<DiagnosticSession> _sessions = [];
 
@@ -16,36 +17,29 @@ class DiagnosticService extends ChangeNotifier {
       _sessions.where((s) => s.vehicleId == vehicleId).toList();
 
   Future<void> load() async {
-    if (!SupabaseConfig.isConfigured) return;
-    try {
-      final rows = await SupabaseConfig.client
-          .from('diagnostics')
-          .select()
-          .order('created_at', ascending: false);
-      _sessions
-        ..clear()
-        ..addAll(rows.map((r) => DiagnosticSession.fromJson(r)));
-      notifyListeners();
-    } catch (_) {}
+    final rows = LocalStoreService.readJsonList(_storageKey);
+    _sessions
+      ..clear()
+      ..addAll(rows.map(DiagnosticSession.fromJson));
+    notifyListeners();
   }
 
   Future<void> save(DiagnosticSession s) async {
     _sessions.insert(0, s);
     notifyListeners();
-
-    if (!SupabaseConfig.isConfigured) return;
-    try {
-      await SupabaseConfig.client.from('diagnostics').insert(s.toJson());
-    } catch (_) {}
+    await _persist();
   }
 
   Future<void> delete(String id) async {
     _sessions.removeWhere((s) => s.id == id);
     notifyListeners();
+    await _persist();
+  }
 
-    if (!SupabaseConfig.isConfigured) return;
-    try {
-      await SupabaseConfig.client.from('diagnostics').delete().eq('id', id);
-    } catch (_) {}
+  Future<void> _persist() {
+    return LocalStoreService.writeJsonList(
+      _storageKey,
+      _sessions.map((s) => s.toJson()).toList(),
+    );
   }
 }

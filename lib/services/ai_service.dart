@@ -8,13 +8,11 @@ import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
 import '../models/vehicle.dart';
 
-/// Orchestrates AI diagnostic calls to Gemini.
-/// Falls back to a heuristic-based local analysis when the API is unavailable.
+/// Orchestrates AI diagnostic calls through a backend proxy.
+/// Falls back to a heuristic-based local analysis when the backend is unavailable.
 class AiService {
   AiService._();
   static final instance = AiService._();
-
-  // ── Symptom-based (urgent) diagnosis ────────────────────────────────────
 
   Future<AiDiagnosticResponse> analyzeSymptoms({
     required Vehicle vehicle,
@@ -22,25 +20,33 @@ class AiService {
     required Severity severity,
     String? description,
   }) async {
-    final prompt = _buildSymptomPrompt(
-      vehicle: vehicle,
-      symptoms: symptoms,
-      severity: severity,
-      description: description,
-    );
-
     if (!AiConfig.isConfigured) {
-      return _localSymptomAnalysis(symptoms, severity);
+      return _localSymptomAnalysis(
+        symptoms,
+        severity,
+        errorCode: 'backend_not_configured',
+      );
     }
 
     try {
-      return await _callGeminiText(prompt);
-    } catch (_) {
-      return _localSymptomAnalysis(symptoms, severity);
+      final payload = await _postJson(
+        '/api/diagnose/symptoms',
+        {
+          'vehicle': _vehiclePayload(vehicle),
+          'symptoms': symptoms,
+          'severity': severity.name,
+          'description': description,
+        },
+      );
+      return AiDiagnosticResponse.fromJson(payload);
+    } catch (e) {
+      return _localSymptomAnalysis(
+        symptoms,
+        severity,
+        errorCode: _extractErrorCode(e),
+      );
     }
   }
-
-  // ── Photo-based diagnosis ──────────────────────────────────────────────
 
   Future<AiDiagnosticResponse> analyzePhotos({
     required Vehicle vehicle,
@@ -48,204 +54,80 @@ class AiService {
     String? description,
   }) async {
     if (!AiConfig.isConfigured || images.isEmpty) {
-      return _localPhotoFallback(description);
-    }
-
-    try {
-      return await _callGeminiVision(
-        vehicle: vehicle,
-        images: images,
-        description: description,
+      return _localPhotoFallback(
+        description,
+        errorCode: !AiConfig.isConfigured
+            ? 'backend_not_configured'
+            : 'missing_images',
       );
-    } catch (_) {
-      return _localPhotoFallback(description);
     }
-  }
-
-  // ── Gemini text call ──────────────────────────────────────────────────
-
-  Future<AiDiagnosticResponse> _callGeminiText(String prompt) async {
-    final body = jsonEncode({
-      'contents': [
-        {
-          'parts': [
-            {'text': prompt},
-          ],
-        },
-      ],
-      'generationConfig': {
-        'temperature': 0.3,
-        'maxOutputTokens': 2048,
-        'responseMimeType': 'application/json',
-      },
-    });
-
-    final resp = await http
-        .post(
-          Uri.parse(AiConfig.geminiEndpoint),
-          headers: {'Content-Type': 'application/json'},
-          body: body,
-        )
-        .timeout(const Duration(seconds: 30));
-
-    if (resp.statusCode != 200) {
-      throw HttpException('Gemini returned ${resp.statusCode}');
-    }
-
-    return _parseGeminiResponse(resp.body);
-  }
-
-  // ── Gemini vision call ────────────────────────────────────────────────
-
-  Future<AiDiagnosticResponse> _callGeminiVision({
-    required Vehicle vehicle,
-    required List<File> images,
-    String? description,
-  }) async {
-    final parts = <Map<String, dynamic>>[
-      {'text': _buildPhotoPrompt(vehicle: vehicle, description: description)},
-    ];
-
-    for (final img in images.take(4)) {
-      final bytes = await img.readAsBytes();
-      final b64 = base64Encode(bytes);
-      final mime = img.path.toLowerCase().endsWith('.png')
-          ? 'image/png'
-          : 'image/jpeg';
-      parts.add({
-        'inlineData': {'mimeType': mime, 'data': b64},
-      });
-    }
-
-    final body = jsonEncode({
-      'contents': [
-        {'parts': parts},
-      ],
-      'generationConfig': {
-        'temperature': 0.3,
-        'maxOutputTokens': 2048,
-        'responseMimeType': 'application/json',
-      },
-    });
-
-    final resp = await http
-        .post(
-          Uri.parse(AiConfig.geminiVisionEndpoint),
-          headers: {'Content-Type': 'application/json'},
-          body: body,
-        )
-        .timeout(const Duration(seconds: 45));
-
-    if (resp.statusCode != 200) {
-      throw HttpException('Gemini vision returned ${resp.statusCode}');
-    }
-
-    return _parseGeminiResponse(resp.body);
-  }
-
-  // ── Response parsing ──────────────────────────────────────────────────
-
-  AiDiagnosticResponse _parseGeminiResponse(String responseBody) {
-    final json = jsonDecode(responseBody) as Map<String, dynamic>;
-
-    final candidates = json['candidates'] as List?;
-    if (candidates == null || candidates.isEmpty) {
-      return AiDiagnosticResponse.fallback('No response from AI');
-    }
-
-    final content = candidates[0]['content'] as Map<String, dynamic>?;
-    final parts = content?['parts'] as List?;
-    if (parts == null || parts.isEmpty) {
-      return AiDiagnosticResponse.fallback('Empty AI response');
-    }
-
-    final text = parts[0]['text'] as String? ?? '';
 
     try {
-      final parsed = jsonDecode(text) as Map<String, dynamic>;
-      return AiDiagnosticResponse.fromJson(parsed);
-    } catch (_) {
-      return AiDiagnosticResponse.fallback(text);
+      final encodedImages = <Map<String, dynamic>>[];
+      for (final img in images.take(8)) {
+        final bytes = await img.readAsBytes();
+        encodedImages.add({
+          'mime_type': img.path.toLowerCase().endsWith('.png')
+              ? 'image/png'
+              : 'image/jpeg',
+          'data': base64Encode(bytes),
+        });
+      }
+
+      final payload = await _postJson(
+        '/api/diagnose/photos',
+        {
+          'vehicle': _vehiclePayload(vehicle),
+          'images': encodedImages,
+          'description': description,
+        },
+      );
+      return AiDiagnosticResponse.fromJson(payload);
+    } catch (e) {
+      return _localPhotoFallback(
+        description,
+        errorCode: _extractErrorCode(e),
+      );
     }
   }
 
-  // ── Prompt builders ───────────────────────────────────────────────────
+  Future<Map<String, dynamic>> _postJson(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final resp = await http
+        .post(
+          AiConfig.endpoint(path),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 90));
 
-  String _buildSymptomPrompt({
-    required Vehicle vehicle,
-    required List<String> symptoms,
-    required Severity severity,
-    String? description,
-  }) {
-    return '''
-You are FixEase, an expert automotive diagnostic AI. Analyze the following vehicle symptoms and return a JSON object.
+    final payload = resp.body.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(resp.body) as Map<String, dynamic>;
 
-VEHICLE:
-- ${vehicle.displayName}
-- Fuel: ${vehicle.fuelLabel}
-- Mileage: ${vehicle.mileageKm} km
-${vehicle.lastServiceDate != null ? '- Last service: ${vehicle.lastServiceDate!.day}/${vehicle.lastServiceDate!.month}/${vehicle.lastServiceDate!.year}' : '- Last service: Unknown'}
+    if (resp.statusCode >= 200 && resp.statusCode < 300) {
+      return payload;
+    }
 
-REPORTED SYMPTOMS:
-${symptoms.map((s) => '- $s').join('\n')}
-
-SEVERITY: ${severity.name}
-${description != null ? '\nADDITIONAL NOTES: $description' : ''}
-
-Return ONLY a JSON object with this exact structure:
-{
-  "summary": "Brief 2-3 sentence overview of the likely issue",
-  "health_score": <number 0.0-10.0 where 10 is perfect health>,
-  "confidence": <number 0.0-1.0 indicating confidence in diagnosis>,
-  "possible_causes": ["cause1", "cause2", ...],
-  "recommendations": ["action1", "action2", ...],
-  "sub_scores": {"Engine": <0-10>, "Brakes": <0-10>, "Transmission": <0-10>, "Electrical": <0-10>, "Suspension": <0-10>},
-  "urgency_note": "string or null — only if immediate action needed"
-}
-''';
+    final message = payload['message'] as String? ?? 'AI request failed';
+    final code = payload['error_code'] as String? ?? 'request_failed';
+    throw AiRequestException(code, message);
   }
 
-  String _buildPhotoPrompt({
-    required Vehicle vehicle,
-    String? description,
-  }) {
-    return '''
-You are FixEase, an expert automotive diagnostic AI with computer vision. Analyze the attached vehicle photos and return a JSON diagnosis.
-
-VEHICLE:
-- ${vehicle.displayName}
-- Fuel: ${vehicle.fuelLabel}
-- Mileage: ${vehicle.mileageKm} km
-
-${description != null ? 'USER DESCRIPTION: $description\n' : ''}
-Examine the images for:
-- Visible damage (dents, scratches, cracks)
-- Fluid leaks (oil, coolant, brake fluid)
-- Tire condition (tread depth, uneven wear, bulges)
-- Rust or corrosion
-- Worn belts, hoses, or connectors
-- Dashboard warning lights
-- Any other anomalies
-
-Return ONLY a JSON object with this exact structure:
-{
-  "summary": "Brief 2-3 sentence overview of what you see",
-  "health_score": <number 0.0-10.0 where 10 is perfect>,
-  "confidence": <number 0.0-1.0 indicating how confident you are>,
-  "possible_causes": ["issue1", "issue2", ...],
-  "recommendations": ["action1", "action2", ...],
-  "sub_scores": {"Body": <0-10>, "Tires": <0-10>, "Engine Bay": <0-10>, "Fluids": <0-10>, "Interior": <0-10>},
-  "urgency_note": "string or null — only if immediate action needed"
-}
-''';
-  }
-
-  // ── Offline / fallback analysis ───────────────────────────────────────
+  Map<String, dynamic> _vehiclePayload(Vehicle vehicle) => {
+        'display_name': vehicle.displayName,
+        'fuel_label': vehicle.fuelLabel,
+        'mileage_km': vehicle.mileageKm,
+        'last_service_date': vehicle.lastServiceDate?.toIso8601String(),
+      };
 
   AiDiagnosticResponse _localSymptomAnalysis(
     List<String> symptoms,
-    Severity severity,
-  ) {
+    Severity severity, {
+    String? errorCode,
+  }) {
     final count = symptoms.length;
     final sevMult = switch (severity) {
       Severity.low => 1.0,
@@ -269,9 +151,7 @@ Return ONLY a JSON object with this exact structure:
 
     return AiDiagnosticResponse(
       summary:
-          'Based on $count reported symptom(s) at ${severity.name} severity, '
-          'your vehicle may need professional inspection. '
-          'This is an offline estimate — connect to AI for a detailed analysis.',
+          'AI diagnosis is unavailable right now, so this is an on-device estimate based on your reported symptoms.',
       healthScore: double.parse(score.toStringAsFixed(1)),
       confidence: 0.35,
       possibleCauses: [
@@ -282,12 +162,10 @@ Return ONLY a JSON object with this exact structure:
           'Multiple subsystems may be affected',
       ],
       recommendations: [
+        'Check that the AI backend is running and reachable',
         'Visit a certified mechanic for hands-on inspection',
         if (severity == Severity.critical || severity == Severity.high)
-          'Do not drive until inspected — consider towing',
-        'Enable AI analysis for a more accurate diagnosis',
-        if (hasEngine) 'Check engine oil level and coolant',
-        if (hasBrake) 'Check brake fluid level and pad thickness',
+          'Do not drive until inspected; consider towing',
       ],
       subScores: {
         'Engine': hasEngine ? score * 0.6 : score * 0.9,
@@ -299,22 +177,44 @@ Return ONLY a JSON object with this exact structure:
       urgencyNote: severity == Severity.critical
           ? 'CRITICAL: Avoid driving this vehicle until inspected.'
           : null,
+      provider: 'local',
+      isFallback: true,
+      errorCode: errorCode,
     );
   }
 
-  AiDiagnosticResponse _localPhotoFallback(String? description) {
+  AiDiagnosticResponse _localPhotoFallback(
+    String? description, {
+    String? errorCode,
+  }) {
     return AiDiagnosticResponse(
-      summary: 'Photo analysis requires an active AI connection. '
-          'Your images have been saved and will be analyzed once '
-          'the Gemini API key is configured.'
+      summary: 'AI photo analysis is unavailable right now, so no remote image analysis was performed.'
           '${description != null ? ' You noted: "$description"' : ''}',
       healthScore: 5.0,
       confidence: 0.15,
-      possibleCauses: const ['Requires AI vision model for analysis'],
+      possibleCauses: const ['Requires a reachable AI backend for photo analysis'],
       recommendations: const [
-        'Configure your Gemini API key for photo analysis',
+        'Check that the AI backend is running and reachable',
         'Visit a mechanic for visual inspection',
       ],
+      provider: 'local',
+      isFallback: true,
+      errorCode: errorCode,
     );
   }
+
+  String? _extractErrorCode(Object error) {
+    if (error is AiRequestException) return error.code;
+    return null;
+  }
+}
+
+class AiRequestException implements Exception {
+  const AiRequestException(this.code, this.message);
+
+  final String code;
+  final String message;
+
+  @override
+  String toString() => message;
 }

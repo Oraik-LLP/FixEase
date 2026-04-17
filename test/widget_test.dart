@@ -119,6 +119,9 @@ void main() {
         'recommendations': ['Fix X'],
         'sub_scores': {'Engine': 8.0, 'Brakes': 6.5},
         'urgency_note': 'Check soon',
+        'provider': 'gemini',
+        'is_fallback': false,
+        'error_code': null,
       };
       final r = AiDiagnosticResponse.fromJson(json);
       expect(r.summary, 'Test summary');
@@ -127,6 +130,8 @@ void main() {
       expect(r.possibleCauses.length, 2);
       expect(r.subScores['Engine'], 8.0);
       expect(r.urgencyNote, 'Check soon');
+      expect(r.provider, 'gemini');
+      expect(r.isFallback, false);
       expect(r.healthLabel, 'Fair');
       expect(r.confidenceLabel, '85%');
     });
@@ -138,6 +143,8 @@ void main() {
       expect(r.confidence, 0.5);
       expect(r.possibleCauses, isEmpty);
       expect(r.subScores, isEmpty);
+      expect(r.provider, 'local');
+      expect(r.isFallback, false);
     });
 
     test('subScores parsing handles string values', () {
@@ -158,6 +165,9 @@ void main() {
       expect(r.healthScore, 5.0);
       expect(r.confidence, 0.3);
       expect(r.rawText, 'Raw text here');
+      expect(r.provider, 'local');
+      expect(r.isFallback, true);
+      expect(r.errorCode, 'parse_failed');
     });
 
     test('healthLabel categories', () {
