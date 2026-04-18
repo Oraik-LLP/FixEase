@@ -98,15 +98,9 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     try {
       final xfile = await _cameraCtrl!.takePicture();
       if (!mounted) return;
-
       final bytes = await xfile.readAsBytes();
       if (!mounted) return;
-      final text = _msgCtrl.text.trim().isNotEmpty
-          ? _msgCtrl.text.trim()
-          : 'What do you see here?';
-      _msgCtrl.clear();
-
-      GeminiLiveService.instance.sendFrame(Uint8List.fromList(bytes), text);
+      GeminiLiveService.instance.sendImage(Uint8List.fromList(bytes));
       _scrollToBottom();
     } catch (_) {
       // Camera capture failed
@@ -119,7 +113,13 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     HapticFeedback.selectionClick();
     _msgCtrl.clear();
 
-    GeminiLiveService.instance.sendText(text);
+    await GeminiLiveService.instance.sendText(text);
+    _scrollToBottom();
+  }
+
+  void _toggleMic() {
+    HapticFeedback.mediumImpact();
+    GeminiLiveService.instance.toggleRecording();
     _scrollToBottom();
   }
 
@@ -268,41 +268,102 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
 
         _scrollToBottom();
 
-        return Stack(
+        return Column(
           children: [
+            // ── Inline camera strip (tap to snap) ────────────────────
             if (_cameraCtrl != null && _cameraCtrl!.value.isInitialized)
-              Positioned.fill(
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: _cameraCtrl!.value.previewSize?.height ?? 1,
-                    height: _cameraCtrl!.value.previewSize?.width ?? 1,
-                    child: CameraPreview(_cameraCtrl!),
+              GestureDetector(
+                onTap: isAnalyzing ? null : _captureAndSend,
+                child: Container(
+                  height: 80,
+                  margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: svc.isRecording
+                          ? const Color(0xFFEF4444)
+                          : AppColors.accent.withValues(alpha: 0.25),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12.5),
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: FittedBox(
+                            fit: BoxFit.cover,
+                            child: SizedBox(
+                              width: _cameraCtrl!.value.previewSize?.height ?? 1,
+                              height: _cameraCtrl!.value.previewSize?.width ?? 1,
+                              child: CameraPreview(_cameraCtrl!),
+                            ),
+                          ),
+                        ),
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                                colors: [
+                                  Colors.black.withValues(alpha: 0.45),
+                                  Colors.transparent,
+                                  Colors.black.withValues(alpha: 0.15),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: 12, top: 0, bottom: 0,
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.accent.withValues(alpha: 0.85),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 15),
+                              ),
+                              const SizedBox(width: 8),
+                              Text('Tap to snap',
+                                style: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 11, fontWeight: FontWeight.w600)),
+                            ],
+                          ),
+                        ),
+                        Positioned(
+                          right: 8, top: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(width: 6, height: 6, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFEF4444))),
+                                const SizedBox(width: 4),
+                                const Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w700)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      AppColors.background.withValues(alpha: 0.1),
-                      AppColors.background.withValues(alpha: 0.4),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Column(
-              children: [
-                Expanded(
-                  child: msgs.isEmpty
-                      ? _buildWelcome(tt)
+
+            // ── Chat messages ────────────────────────────────────────
+            Expanded(
+              child: msgs.isEmpty
+                  ? _buildWelcome(tt)
                   : ListView.builder(
                       controller: _scrollCtrl,
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                       itemCount: msgs.length + (isAnalyzing ? 1 : 0),
                       itemBuilder: (_, i) {
                         if (i == msgs.length && isAnalyzing) {
@@ -313,70 +374,58 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                     ),
             ),
 
+            // ── Bottom input bar ─────────────────────────────────────
             if (!isDone)
               Container(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 decoration: BoxDecoration(
                   color: AppColors.surface.withValues(alpha: 0.5),
-                  border: const Border(
-                    top: BorderSide(color: Color(0x0CFFFFFF)),
-                  ),
+                  border: const Border(top: BorderSide(color: Color(0x0CFFFFFF))),
                 ),
                 child: Row(
                   children: [
-                    // camera capture button
                     GestureDetector(
-                      onTap: isAnalyzing ? null : _captureAndSend,
+                      onTap: isAnalyzing ? null : _toggleMic,
                       child: Container(
-                        width: 44,
-                        height: 44,
+                        width: 44, height: 44,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: isAnalyzing
-                              ? AppColors.surfaceHighlight
+                          color: svc.isRecording ? const Color(0xFFEF4444)
+                              : isAnalyzing ? AppColors.surfaceHighlight
                               : AppColors.accent.withValues(alpha: 0.15),
                           border: Border.all(
-                            color: isAnalyzing
-                                ? const Color(0x0CFFFFFF)
+                            color: svc.isRecording ? const Color(0xFFEF4444)
+                                : isAnalyzing ? const Color(0x0CFFFFFF)
                                 : AppColors.accent.withValues(alpha: 0.4),
                           ),
                         ),
                         child: Icon(
-                          Icons.camera_alt_rounded,
+                          svc.isRecording ? Icons.stop_rounded : Icons.mic_rounded,
                           size: 20,
-                          color: isAnalyzing
-                              ? AppColors.textTertiary
-                              : AppColors.accent,
+                          color: svc.isRecording ? Colors.white
+                              : isAnalyzing ? AppColors.textTertiary : AppColors.accent,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: NeuTextField(
-                        hint: 'Ask about what you see…',
+                        hint: 'Type a message…',
                         icon: Icons.chat_rounded,
                         controller: _msgCtrl,
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     GestureDetector(
                       onTap: isAnalyzing ? null : _sendText,
                       child: Container(
-                        width: 44,
-                        height: 44,
+                        width: 44, height: 44,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: isAnalyzing
-                              ? AppColors.surfaceHighlight
-                              : AppColors.accent,
+                          color: isAnalyzing ? AppColors.surfaceHighlight : AppColors.accent,
                         ),
-                        child: Icon(
-                          Icons.send_rounded,
-                          size: 18,
-                          color: isAnalyzing
-                              ? AppColors.textTertiary
-                              : Colors.white,
-                        ),
+                        child: Icon(Icons.send_rounded, size: 18,
+                          color: isAnalyzing ? AppColors.textTertiary : Colors.white),
                       ),
                     ),
                   ],
@@ -392,9 +441,7 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                 ),
               ),
           ],
-        ),
-      ],
-    );
+        );
       },
     );
   }
@@ -413,23 +460,16 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                 shape: BoxShape.circle,
                 color: AppColors.accent.withValues(alpha: 0.1),
               ),
-              child: const Icon(Icons.videocam_rounded,
+              child: const Icon(Icons.mic_rounded,
                   size: 40, color: AppColors.accent),
             ),
             const SizedBox(height: 20),
-            Text('Gemini Live', style: tt.headlineMedium),
+            Text('FixEase Voice', style: tt.headlineMedium),
             const SizedBox(height: 8),
             Text(
-              'Point your camera at the issue area and tap the camera button to capture a frame. Gemini will analyze it in real-time.',
+              'Tap the mic to speak, type a message, or snap a photo. Gemini will diagnose your car issue.',
               style: tt.bodyMedium,
               textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-            NeuPrimaryButton(
-              expanded: false,
-              label: 'Capture First Frame',
-              icon: Icons.camera_alt_rounded,
-              onPressed: _captureAndSend,
             ),
           ],
         ),

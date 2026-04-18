@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/diagnostic.dart';
+import 'conversation_service.dart';
 import 'local_store_service.dart';
 
 /// Manages diagnostic sessions on-device.
@@ -33,6 +34,7 @@ class DiagnosticService extends ChangeNotifier {
   Future<void> delete(String id) async {
     _sessions.removeWhere((s) => s.id == id);
     notifyListeners();
+    await ConversationService.instance.deleteForSession(id);
     await _persist();
   }
 

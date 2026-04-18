@@ -6,17 +6,23 @@ import 'models/ai_response.dart';
 import 'models/diagnostic.dart';
 import 'models/vehicle.dart';
 import 'screens/auth/auth_screen.dart';
+import 'screens/conversations/conversation_chat_screen.dart';
 import 'screens/diagnose/live_diagnose_screen.dart';
 import 'screens/diagnose/photo_diagnose_screen.dart';
 import 'screens/diagnose/urgent_wizard_screen.dart';
+import 'screens/garage/garage_tab_body.dart';
+import 'screens/reports/diagnostic_history_screen.dart';
 import 'screens/reports/report_detail_screen.dart';
 import 'screens/subscription/paywall_screen.dart';
 import 'screens/vehicle/add_vehicle_screen.dart';
 import 'screens/vehicle/my_vehicles_screen.dart';
 import 'services/auth_service.dart';
 import 'services/car_image_service.dart';
+import 'services/conversation_service.dart';
 import 'services/diagnostic_service.dart';
+import 'services/garage_service.dart';
 import 'services/local_store_service.dart';
+import 'services/reminder_scheduler_service.dart';
 import 'services/subscription_service.dart';
 import 'services/vehicle_service.dart';
 import 'theme/app_theme.dart';
@@ -32,7 +38,15 @@ void main() async {
   } catch (_) {}
   try { await VehicleService.instance.load(); } catch (_) {}
   try { await DiagnosticService.instance.load(); } catch (_) {}
+  try { await ConversationService.instance.load(); } catch (_) {}
+  try { await GarageService.instance.load(); } catch (_) {}
   try { await SubscriptionService.instance.restore(); } catch (_) {}
+  try {
+    await ReminderSchedulerService.instance.initialize(
+      requestPermissions: false,
+    );
+    await ReminderSchedulerService.instance.syncAllProfiles();
+  } catch (_) {}
   runApp(const FixEaseApp());
 }
 
@@ -199,7 +213,7 @@ class AppShellState extends State<AppShell> {
   static const List<String> _titles = [
     'FixEase',
     'Diagnose',
-    'Reports',
+    'Garage',
     'Profile',
   ];
 
@@ -246,7 +260,7 @@ class AppShellState extends State<AppShell> {
           children: const [
             HomeTabBody(),
             DiagnoseTabBody(),
-            ReportsTabBody(),
+            GarageTabBody(),
             ProfileTabBody(),
           ],
         ),
@@ -263,7 +277,7 @@ class AppShellState extends State<AppShell> {
           NavigationDestination(
               icon: Icon(Icons.support_rounded), label: 'Diagnose'),
           NavigationDestination(
-              icon: Icon(Icons.insights_rounded), label: 'Reports'),
+              icon: Icon(Icons.garage_rounded), label: 'Garage'),
           NavigationDestination(
               icon: Icon(Icons.person_rounded), label: 'Profile'),
         ],
@@ -341,12 +355,20 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   const SizedBox(width: 12),
                   NeuIconButton(
                     icon: Icons.history_rounded,
-                    onPressed: () {},
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const DiagnosticHistoryScreen(),
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 12),
                   NeuIconButton(
                     icon: Icons.notifications_rounded,
-                    onPressed: () {},
+                    onPressed: () {
+                      final shell =
+                          context.findAncestorStateOfType<AppShellState>();
+                      shell?.switchTab(2);
+                    },
                   ),
                 ],
               ),
@@ -418,6 +440,56 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  final shell = context.findAncestorStateOfType<AppShellState>();
+                  shell?.switchTab(2);
+                },
+                child: NeuPane(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppColors.accent.withValues(alpha: 0.15),
+                        ),
+                        child: const Icon(
+                          Icons.garage_rounded,
+                          size: 20,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Garage', style: tt.titleMedium),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Track upcoming oil, tire, and registration reminders offline.',
+                              style: tt.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: AppColors.textTertiary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               const SizedBox(height: 22),
 
               // vehicle health — live from latest diagnostic
@@ -427,14 +499,21 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   final sessions = vehicle != null
                       ? DiagnosticService.instance
                           .sessionsForVehicle(vehicle.id)
+                          .where((session) =>
+                              session.type != DiagnosticType.invoiceAudit &&
+                              session.type != DiagnosticType.live)
+                          .toList()
                       : <DiagnosticSession>[];
                   final latest = sessions.isNotEmpty ? sessions.first : null;
                   final hasAi = latest?.aiResponseJson != null;
                   final resp = hasAi
                       ? AiDiagnosticResponse.fromJson(latest!.aiResponseJson!)
                       : null;
-                  final score = latest?.healthScore ?? 0.0;
-                  final scorePct = (score / 10).clamp(0.0, 1.0);
+                  final scoreLabel = resp?.displayScoreLabel ??
+                      (latest?.healthScore?.toStringAsFixed(1) ?? '—');
+                  final scorePct = resp?.displayProgress ??
+                      (((latest?.healthScore ?? 0.0) / 10).clamp(0.0, 1.0));
+                  final subScores = resp?.normalizedSubScores ?? const <String, double>{};
 
                   return NeuPane(
                     child: Column(
@@ -448,18 +527,16 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                             NeuProgressRing(
                               progress: scorePct,
                               size: 90,
-                              label: latest != null
-                                  ? score.toStringAsFixed(1)
-                                  : '—',
+                              label: scoreLabel,
                             ),
-                            if (resp != null && resp.subScores.isNotEmpty)
+                            if (subScores.isNotEmpty)
                               Expanded(
                                 child: Padding(
                                   padding: const EdgeInsets.only(left: 16),
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
-                                    children: resp.subScores.entries
+                                    children: subScores.entries
                                         .take(3)
                                         .map((e) => Padding(
                                               padding: const EdgeInsets.only(
@@ -474,8 +551,9 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                                   SizedBox(
                                                     width: 140,
                                                     child: NeuSlider(
-                                                      value: (e.value / 10)
-                                                          .clamp(0.0, 1.0),
+                                                      value: resp?.usesHundredPointScale == true
+                                                          ? (e.value / 100).clamp(0.0, 1.0)
+                                                          : (e.value / 10).clamp(0.0, 1.0),
                                                     ),
                                                   ),
                                                 ],
@@ -523,7 +601,10 @@ class _HomeTabBodyState extends State<HomeTabBody> {
 
               // recent diagnostics
               ListenableBuilder(
-                listenable: DiagnosticService.instance,
+                listenable: Listenable.merge([
+                  DiagnosticService.instance,
+                  ConversationService.instance,
+                ]),
                 builder: (context, _) {
                   final sessions = vehicle != null
                       ? DiagnosticService.instance
@@ -538,39 +619,64 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                         if (sessions.isEmpty)
                           Text('No diagnostics yet.', style: tt.bodySmall)
                         else
-                          ...sessions.take(3).map((s) => GestureDetector(
+                          ...sessions.take(3).map((s) {
+                            final response = s.aiResponseJson != null
+                                ? AiDiagnosticResponse.fromJson(
+                                    s.aiResponseJson!,
+                                  )
+                                : null;
+                            final scoreLabel = response?.displayScoreLabel ??
+                                s.healthScore?.toStringAsFixed(1);
+                            final scoreSuffix = response == null
+                                ? '/10'
+                                : response.usesHundredPointScale
+                                    ? ''
+                                    : '/10';
+                            return GestureDetector(
                                 onTap: () {
                                   HapticFeedback.selectionClick();
                                   Navigator.of(context).push(
                                     MaterialPageRoute<void>(
-                                      builder: (_) =>
-                                          ReportDetailScreen(session: s),
-                                    ),
-                                  );
-                                },
+                                      builder: (_) => s.type == DiagnosticType.live
+                                          ? ConversationChatScreen(session: s)
+                                          : ReportDetailScreen(session: s),
+                                      ),
+                                    );
+                                  },
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
                                       vertical: 6),
                                   child: Row(
                                     children: [
                                       Icon(
-                                        s.type == DiagnosticType.urgent
-                                            ? Icons.warning_amber_rounded
-                                            : Icons.camera_alt_outlined,
+                                        switch (s.type) {
+                                          DiagnosticType.urgent =>
+                                            Icons.warning_amber_rounded,
+                                          DiagnosticType.photo =>
+                                            Icons.camera_alt_outlined,
+                                          DiagnosticType.invoiceAudit =>
+                                            Icons.receipt_long_rounded,
+                                          DiagnosticType.live =>
+                                            Icons.videocam_rounded,
+                                        },
                                         size: 16,
                                         color: AppColors.accent,
                                       ),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          '${s.type == DiagnosticType.urgent ? "Urgent" : "Photo"} · '
-                                          '${s.dateLabel}',
+                                          '${switch (s.type) {
+                                            DiagnosticType.urgent => "Urgent",
+                                            DiagnosticType.photo => "Photo",
+                                            DiagnosticType.invoiceAudit => "Invoice Audit",
+                                            DiagnosticType.live => "Gemini Live",
+                                          }} · ${s.dateLabel}',
                                           style: tt.bodyMedium,
                                         ),
                                       ),
                                       if (s.healthScore != null)
                                         Text(
-                                          '${s.healthScore!.toStringAsFixed(1)}/10',
+                                          '$scoreLabel$scoreSuffix',
                                           style: tt.bodySmall?.copyWith(
                                             color: AppColors.accent,
                                             fontWeight: FontWeight.w600,
@@ -584,7 +690,8 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                     ],
                                   ),
                                 ),
-                              )),
+                              );
+                          }),
                       ],
                     ),
                   );
@@ -957,6 +1064,18 @@ class DiagnoseTabBody extends StatelessWidget {
             badge: 'BETA',
             onTap: () => launchLiveDiagnosis(context),
           ),
+          const SizedBox(height: 14),
+          _DiagnoseOptionCard(
+            icon: Icons.garage_rounded,
+            title: 'Garage',
+            description:
+                'Set upcoming service reminders for oil, tires, and registration that stay local on your device.',
+            accentColor: const Color(0xFF42A5F5),
+            onTap: () {
+              final shell = context.findAncestorStateOfType<AppShellState>();
+              shell?.switchTab(2);
+            },
+          ),
         ],
       ),
     );
@@ -1066,7 +1185,10 @@ class ReportsTabBody extends StatelessWidget {
     final tt = Theme.of(context).textTheme;
 
     return ListenableBuilder(
-      listenable: DiagnosticService.instance,
+      listenable: Listenable.merge([
+        DiagnosticService.instance,
+        ConversationService.instance,
+      ]),
       builder: (context, _) {
         final all = DiagnosticService.instance.sessions;
 
@@ -1106,6 +1228,15 @@ class _ReportListCard extends StatelessWidget {
   final DiagnosticSession session;
 
   Color get _scoreColor {
+    final response = session.aiResponseJson != null
+        ? AiDiagnosticResponse.fromJson(session.aiResponseJson!)
+        : null;
+    if (session.type == DiagnosticType.live) {
+      return const Color(0xFF4CAF50);
+    }
+    if (response != null) {
+      return response.statusColor;
+    }
     final sc = session.healthScore ?? 0;
     if (sc >= 8) return const Color(0xFF4CAF50);
     if (sc >= 6) return const Color(0xFFFFC107);
@@ -1117,6 +1248,33 @@ class _ReportListCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
     final isUrgent = session.type == DiagnosticType.urgent;
+    final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
+    final isLive = session.type == DiagnosticType.live;
+    final response = session.aiResponseJson != null
+        ? AiDiagnosticResponse.fromJson(session.aiResponseJson!)
+        : null;
+    final thread = ConversationService.instance.threadForSession(session.id);
+    final icon = isUrgent
+        ? Icons.warning_amber_rounded
+        : isInvoiceAudit
+            ? Icons.receipt_long_rounded
+            : isLive
+                ? Icons.videocam_rounded
+                : Icons.camera_alt_outlined;
+    final iconColor = isUrgent
+        ? const Color(0xFFFF9800)
+        : isInvoiceAudit
+            ? const Color(0xFFFF7043)
+            : isLive
+                ? const Color(0xFF4CAF50)
+                : AppColors.accent;
+    final title = isUrgent
+        ? 'Urgent Diagnosis'
+        : isInvoiceAudit
+            ? 'Invoice Audit'
+            : isLive
+                ? 'Gemini Live'
+                : 'Photo Diagnosis';
 
     return Dismissible(
       key: ValueKey(session.id),
@@ -1163,7 +1321,9 @@ class _ReportListCard extends StatelessWidget {
         onTap: () {
           HapticFeedback.selectionClick();
           Navigator.of(context).push(MaterialPageRoute<void>(
-            builder: (_) => ReportDetailScreen(session: session),
+            builder: (_) => isLive
+                ? ConversationChatScreen(session: session)
+                : ReportDetailScreen(session: session),
           ));
         },
         child: NeuPane(
@@ -1180,7 +1340,8 @@ class _ReportListCard extends StatelessWidget {
                       width: 52,
                       height: 52,
                       child: CircularProgressIndicator(
-                        value: ((session.healthScore ?? 0) / 10)
+                        value: (response?.displayProgress ??
+                                ((session.healthScore ?? 0) / 10))
                             .clamp(0, 1)
                             .toDouble(),
                         strokeWidth: 3,
@@ -1189,9 +1350,10 @@ class _ReportListCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      session.healthScore != null
-                          ? session.healthScore!.toStringAsFixed(1)
-                          : '—',
+                      response?.displayScoreLabel ??
+                          (session.healthScore != null
+                              ? session.healthScore!.toStringAsFixed(1)
+                              : '—'),
                       style: tt.bodySmall?.copyWith(
                         color: _scoreColor,
                         fontWeight: FontWeight.w700,
@@ -1209,20 +1371,14 @@ class _ReportListCard extends StatelessWidget {
                     Row(
                       children: [
                         Icon(
-                          isUrgent
-                              ? Icons.warning_amber_rounded
-                              : Icons.camera_alt_outlined,
+                          icon,
                           size: 15,
-                          color: isUrgent
-                              ? const Color(0xFFFF9800)
-                              : AppColors.accent,
+                          color: iconColor,
                         ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            isUrgent
-                                ? 'Urgent Diagnosis'
-                                : 'Photo Diagnosis',
+                            title,
                             style: tt.titleMedium,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1248,7 +1404,29 @@ class _ReportListCard extends StatelessWidget {
                             style: tt.bodySmall?.copyWith(
                                 color: AppColors.textTertiary)),
                         const Spacer(),
-                        if (session.symptoms.isNotEmpty)
+                        if (isLive)
+                          Flexible(
+                            child: Text(
+                              thread?.previewText ?? 'Saved conversation',
+                              style: tt.bodySmall?.copyWith(
+                                color: AppColors.textTertiary,
+                                fontSize: 10,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
+                            ),
+                          )
+                        else if (session.type == DiagnosticType.invoiceAudit)
+                          Text(
+                            session.aiResponseJson?['document_type'] as String? ??
+                                'Bill review',
+                            style: tt.bodySmall?.copyWith(
+                              color: AppColors.textTertiary,
+                              fontSize: 10,
+                            ),
+                          )
+                        else if (session.symptoms.isNotEmpty)
                           Text(
                             '${session.symptoms.length} symptom(s)',
                             style: tt.bodySmall?.copyWith(
@@ -1341,14 +1519,14 @@ class ProfileTabBody extends StatelessWidget {
             ),
           ),
           _ProfileMenuItem(
-            icon: Icons.insights_rounded,
+            icon: Icons.history_rounded,
             label: 'Diagnostic History',
             onTap: () {
-              // Switch to Reports tab (index 2) — handled by finding AppShell
-              final shell = context.findAncestorStateOfType<AppShellState>();
-              if (shell != null) {
-                shell.switchTab(2);
-              }
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const DiagnosticHistoryScreen(),
+                ),
+              );
             },
           ),
           ListenableBuilder(

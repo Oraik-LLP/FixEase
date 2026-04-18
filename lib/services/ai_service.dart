@@ -2,9 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 
 import '../config/ai_config.dart';
 import '../models/ai_response.dart';
+import '../models/conversation.dart';
 import '../models/diagnostic.dart';
 import '../models/vehicle.dart';
 
@@ -63,22 +65,11 @@ class AiService {
     }
 
     try {
-      final encodedImages = <Map<String, dynamic>>[];
-      for (final img in images.take(8)) {
-        final bytes = await img.readAsBytes();
-        encodedImages.add({
-          'mime_type': img.path.toLowerCase().endsWith('.png')
-              ? 'image/png'
-              : 'image/jpeg',
-          'data': base64Encode(bytes),
-        });
-      }
-
       final payload = await _postJson(
         '/api/diagnose/photos',
         {
           'vehicle': _vehiclePayload(vehicle),
-          'images': encodedImages,
+          'images': await _encodeFiles(images.take(8).toList()),
           'description': description,
         },
       );
@@ -89,6 +80,121 @@ class AiService {
         errorCode: _extractErrorCode(e),
       );
     }
+  }
+
+  Future<AiDiagnosticResponse> analyzeInvoiceAudit({
+    required Vehicle vehicle,
+    required File document,
+    String? purpose,
+  }) async {
+    if (!AiConfig.isConfigured) {
+      return _localInvoiceAuditFallback(
+        purpose,
+        errorCode: 'backend_not_configured',
+      );
+    }
+
+    try {
+      final payload = await _postJson(
+        '/api/diagnose/invoice-audit',
+        {
+          'vehicle': _vehiclePayload(vehicle),
+          'documents': await _encodeFiles([document]),
+          'purpose': purpose,
+        },
+      );
+      return AiDiagnosticResponse.fromJson(payload);
+    } catch (e) {
+      return _localInvoiceAuditFallback(
+        purpose,
+        errorCode: _extractErrorCode(e),
+      );
+    }
+  }
+
+  Future<ConversationAiResponse> continueConversation({
+    Vehicle? vehicle,
+    required DiagnosticSession session,
+    required List<ConversationMessage> history,
+    String? message,
+    File? audioFile,
+    File? attachment,
+  }) async {
+    if (!AiConfig.isConfigured) {
+      return const ConversationAiResponse(
+        text: 'The AI backend is not configured right now, so I cannot continue this conversation yet.',
+        provider: 'local',
+        isFallback: true,
+        errorCode: 'backend_not_configured',
+      );
+    }
+
+    try {
+      final body = <String, dynamic>{
+        'vehicle': _conversationVehiclePayload(vehicle, session),
+        'session_context': _conversationSessionContext(session),
+        'history': history
+            .map(
+              (item) => {
+                'role': item.role.name,
+                'text': item.previewText,
+                'source': item.source.name,
+              },
+            )
+            .toList(),
+      };
+
+      if (message != null && message.trim().isNotEmpty) {
+        body['message'] = message.trim();
+      }
+
+      if (audioFile != null) {
+        final audioBytes = await audioFile.readAsBytes();
+        body['audio'] = {
+          'data': base64Encode(audioBytes),
+          'mimeType': 'audio/wav',
+        };
+      }
+
+      if (attachment != null) {
+        final encoded = await _encodeFiles([attachment]);
+        if (encoded.isNotEmpty) {
+          body['attachment'] = encoded.first;
+        }
+      }
+
+      final payload = await _postJson('/api/conversations/respond', body);
+      return ConversationAiResponse.fromJson(payload);
+    } catch (e) {
+      return ConversationAiResponse(
+        text: 'I could not continue the conversation right now. Please try again.',
+        provider: 'local',
+        isFallback: true,
+        errorCode: _extractErrorCode(e),
+      );
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _encodeFiles(List<File> files) async {
+    final encoded = <Map<String, dynamic>>[];
+    for (final file in files) {
+      final bytes = await file.readAsBytes();
+      encoded.add({
+        'name': p.basename(file.path),
+        'mime_type': _mimeTypeForPath(file.path),
+        'data': base64Encode(bytes),
+      });
+    }
+    return encoded;
+  }
+
+  String _mimeTypeForPath(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    return 'image/jpeg';
   }
 
   Future<Map<String, dynamic>> _postJson(
@@ -121,6 +227,31 @@ class AiService {
         'fuel_label': vehicle.fuelLabel,
         'mileage_km': vehicle.mileageKm,
         'last_service_date': vehicle.lastServiceDate?.toIso8601String(),
+      };
+
+  Map<String, dynamic> _conversationVehiclePayload(
+    Vehicle? vehicle,
+    DiagnosticSession session,
+  ) =>
+      {
+        'display_name': vehicle?.displayName ?? session.vehicleName ?? 'Unknown vehicle',
+        'fuel_label': vehicle?.fuelLabel ?? 'Unknown',
+        'mileage_km': vehicle?.mileageKm ?? 0,
+        'last_service_date': vehicle?.lastServiceDate?.toIso8601String(),
+      };
+
+  Map<String, dynamic> _conversationSessionContext(DiagnosticSession session) => {
+        'session_id': session.id,
+        'session_type': session.type.name,
+        'session_title': session.typeTitle,
+        'vehicle_name': session.vehicleName,
+        'created_at': session.createdAt.toIso8601String(),
+        'severity': session.severity.name,
+        'description': session.description,
+        'symptoms': session.symptoms,
+        'image_urls': session.imageUrls,
+        'diagnosis_summary': session.aiResponse,
+        'diagnosis_json': session.aiResponseJson,
       };
 
   AiDiagnosticResponse _localSymptomAnalysis(
@@ -188,7 +319,8 @@ class AiService {
     String? errorCode,
   }) {
     return AiDiagnosticResponse(
-      summary: 'AI photo analysis is unavailable right now, so no remote image analysis was performed.'
+      summary:
+          'AI photo analysis is unavailable right now, so no remote image analysis was performed.'
           '${description != null ? ' You noted: "$description"' : ''}',
       healthScore: 5.0,
       confidence: 0.15,
@@ -197,6 +329,40 @@ class AiService {
         'Check that the AI backend is running and reachable',
         'Visit a mechanic for visual inspection',
       ],
+      provider: 'local',
+      isFallback: true,
+      errorCode: errorCode,
+    );
+  }
+
+  AiDiagnosticResponse _localInvoiceAuditFallback(
+    String? purpose, {
+    String? errorCode,
+  }) {
+    return AiDiagnosticResponse(
+      summary:
+          'Invoice auditing is unavailable right now, so this is only a limited on-device fallback.'
+          '${purpose != null && purpose.isNotEmpty ? ' Visit purpose: "$purpose".' : ''}',
+      healthScore: 5.0,
+      confidence: 0.1,
+      verdict: 'Mixed',
+      topFlags: const [
+        'Could not run Gemini invoice extraction',
+        'Audit may be partial because the bill was not analyzed remotely',
+      ],
+      recommendations: const [
+        'Retry once the AI backend is reachable',
+        'Ask the shop for a written estimate with parts, labor, and fees separated',
+        'Get a second opinion before approving major repairs',
+      ],
+      questionsToAsk: const [
+        'Can you break down parts, labor hours, and fees separately?',
+        'Was diagnostic time billed anywhere else on this invoice?',
+        'What evidence supports each recommended repair?',
+      ],
+      limitations:
+          'This fallback did not read the uploaded invoice document, so confidence is very low.',
+      partialAudit: true,
       provider: 'local',
       isFallback: true,
       errorCode: errorCode,

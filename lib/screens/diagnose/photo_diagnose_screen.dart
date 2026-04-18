@@ -6,11 +6,14 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../models/ai_response.dart';
 import '../../models/diagnostic.dart';
+import '../conversations/conversation_chat_screen.dart';
+import 'invoice_audit_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../services/storage_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/ai_loading_view.dart';
 import '../../widgets/health_score_card.dart';
 import '../../widgets/neuomorphic.dart';
 
@@ -27,6 +30,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   final _descCtrl = TextEditingController();
   int _step = 0; // 0=capture, 1=preview+describe, 2=analyzing, 3=result
   AiDiagnosticResponse? _result;
+  DiagnosticSession? _session;
 
   bool get _canProceed => switch (_step) {
         0 => _images.isNotEmpty,
@@ -119,6 +123,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
       if (!mounted) return;
       setState(() {
         _result = response;
+        _session = session;
         _step = 3;
       });
     } catch (e) {
@@ -229,6 +234,50 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
           Text(
             'Take or upload up to 8 photos of the issue area.',
             style: tt.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const InvoiceAuditScreen(),
+                  ),
+                );
+              },
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: AppColors.accent.withValues(alpha: 0.12),
+                  border: Border.all(
+                    color: AppColors.accent.withValues(alpha: 0.25),
+                    width: 0.6,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.receipt_long_rounded,
+                      size: 16,
+                      color: AppColors.accent,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Audit Repair Bill',
+                      style: tt.bodySmall?.copyWith(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 20),
 
@@ -392,28 +441,22 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   // ── Step 2: Analyzing ─────────────────────────────────────────────────
 
   Widget _buildAnalyzing(TextTheme tt) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 80,
-            height: 80,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              color: AppColors.accent,
-              backgroundColor: AppColors.surfaceHighlight,
-            ),
-          ),
-          const SizedBox(height: 28),
-          Text('Analyzing photos…', style: tt.headlineMedium),
-          const SizedBox(height: 8),
-          Text(
-            'Our AI is examining your images',
-            style: tt.bodyMedium,
-          ),
-        ],
-      ),
+    return const AiLoadingView(
+      title: 'Inspecting Your Photos',
+      subtitle:
+          'FixEase is checking the uploaded images for visible wear, damage, leaks, warning signs, and likely trouble spots.',
+      stages: [
+        'Reviewing the photo set',
+        'Comparing visible components and damage cues',
+        'Checking likely cause patterns',
+        'Preparing the full report and recommendations',
+      ],
+      tips: [
+        'Wide shots help establish location, while close-ups help confirm the issue.',
+        'Including a warning light or fluid stain in one frame often improves the explanation.',
+        'Multiple angles help separate cosmetic damage from functional damage.',
+        'Good lighting usually matters more than ultra-high image quality.',
+      ],
     );
   }
 
@@ -457,8 +500,28 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
           ),
           const SizedBox(height: 16),
 
-          if (_result != null) DiagnosticResultCard(response: _result!),
+          if (_result != null)
+            DiagnosticResultCard(
+              response: _result!,
+              session: _session,
+            ),
 
+          if (_session != null) ...[
+            const SizedBox(height: 12),
+            DiagnosticClarifyingQuestionPrompt(
+              response: _result!,
+              session: _session!,
+            ),
+            const SizedBox(height: 12),
+            NeuSecondaryButton(
+              label: 'Continue Conversation',
+              icon: Icons.forum_rounded,
+              onPressed: () => openConversationChat(
+                context,
+                session: _session!,
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
           NeuPrimaryButton(
             label: 'Done',

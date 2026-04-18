@@ -5,9 +5,13 @@ import 'package:flutter/services.dart';
 
 import '../../models/ai_response.dart';
 import '../../models/diagnostic.dart';
+import '../conversations/conversation_chat_screen.dart';
+import '../../services/conversation_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/health_score_card.dart';
 import '../../widgets/neuomorphic.dart';
+import '../../widgets/report_export_button.dart';
 
 class ReportDetailScreen extends StatelessWidget {
   const ReportDetailScreen({super.key, required this.session});
@@ -67,20 +71,32 @@ class ReportDetailScreen extends StatelessWidget {
                       _ReportHeader(session: session),
                       const SizedBox(height: 20),
 
-                      if (resp != null) ...[
+                      if (session.type == DiagnosticType.live) ...[
+                        _LiveConversationSection(session: session),
+                        const SizedBox(height: 16),
+                      ] else if (resp != null && session.type == DiagnosticType.invoiceAudit) ...[
+                        DiagnosticResultCard(
+                          response: resp,
+                          session: session,
+                        ),
+                        const SizedBox(height: 16),
+                      ] else if (resp != null) ...[
                         // health ring + badge
-                        _HealthSection(response: resp),
+                        _HealthSection(
+                          response: resp,
+                          session: session,
+                        ),
                         const SizedBox(height: 16),
 
                         // sub-score bars
-                        if (resp.subScores.isNotEmpty) ...[
-                          _SubScoresSection(subScores: resp.subScores),
+                        if (resp.normalizedSubScores.isNotEmpty) ...[
+                          _SubScoresSection(response: resp),
                           const SizedBox(height: 16),
                         ],
 
                         // radar chart for sub-scores
-                        if (resp.subScores.length >= 3) ...[
-                          _RadarSection(subScores: resp.subScores),
+                        if (resp.normalizedSubScores.length >= 3) ...[
+                          _RadarSection(response: resp),
                           const SizedBox(height: 16),
                         ],
 
@@ -141,6 +157,9 @@ class ReportDetailScreen extends StatelessWidget {
                             ],
                           ),
                         ),
+
+                      const SizedBox(height: 16),
+                      _PastConversationsSection(session: session),
 
                       // symptoms detail
                       if (session.symptoms.isNotEmpty) ...[
@@ -208,6 +227,32 @@ class _ReportHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
     final isUrgent = session.type == DiagnosticType.urgent;
+    final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
+    final isLive = session.type == DiagnosticType.live;
+    final invoiceResponse = session.aiResponseJson != null
+        ? AiDiagnosticResponse.fromJson(session.aiResponseJson!)
+        : null;
+    final accentColor = isInvoiceAudit && invoiceResponse != null
+        ? invoiceResponse.statusColor
+        : isLive
+        ? const Color(0xFF4CAF50)
+        : isUrgent
+        ? const Color(0xFFFF9800)
+        : AppColors.accent;
+    final icon = isUrgent
+        ? Icons.warning_amber_rounded
+        : isInvoiceAudit
+            ? Icons.receipt_long_rounded
+            : isLive
+                ? Icons.videocam_rounded
+                : Icons.camera_alt_rounded;
+    final title = isUrgent
+        ? 'Urgent Diagnosis'
+        : isInvoiceAudit
+            ? 'Invoice Audit'
+            : isLive
+                ? 'Gemini Live'
+                : 'Photo Diagnosis';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -218,17 +263,11 @@ class _ReportHeader extends StatelessWidget {
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: (isUrgent
-                        ? const Color(0xFFFF9800)
-                        : AppColors.accent)
-                    .withValues(alpha: 0.15),
+                color: accentColor.withValues(alpha: 0.15),
               ),
               child: Icon(
-                isUrgent
-                    ? Icons.warning_amber_rounded
-                    : Icons.camera_alt_rounded,
-                color:
-                    isUrgent ? const Color(0xFFFF9800) : AppColors.accent,
+                icon,
+                color: accentColor,
                 size: 22,
               ),
             ),
@@ -238,7 +277,7 @@ class _ReportHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    isUrgent ? 'Urgent Diagnosis' : 'Photo Diagnosis',
+                    title,
                     style: tt.headlineMedium,
                   ),
                   const SizedBox(height: 2),
@@ -269,12 +308,16 @@ class _ReportHeader extends StatelessWidget {
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(6),
-                color: AppColors.accent.withValues(alpha: 0.12),
+                color: accentColor.withValues(alpha: 0.12),
               ),
               child: Text(
-                session.severityLabel,
+                isLive
+                    ? 'Conversation'
+                    : isInvoiceAudit
+                    ? (invoiceResponse?.healthLabel ?? 'Audit')
+                    : session.severityLabel,
                 style: tt.bodySmall?.copyWith(
-                  color: AppColors.accent,
+                  color: accentColor,
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
                 ),
@@ -292,8 +335,12 @@ class _ReportHeader extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _HealthSection extends StatelessWidget {
-  const _HealthSection({required this.response});
+  const _HealthSection({
+    required this.response,
+    required this.session,
+  });
   final AiDiagnosticResponse response;
+  final DiagnosticSession session;
 
   @override
   Widget build(BuildContext context) {
@@ -303,20 +350,30 @@ class _HealthSection extends StatelessWidget {
       child: Row(
         children: [
           NeuProgressRing(
-            progress: (response.healthScore / 10).clamp(0, 1),
+            progress: response.displayProgress,
             size: 100,
-            label: response.healthScore.toStringAsFixed(1),
+            label: response.displayScoreLabel,
           ),
           const SizedBox(width: 20),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Overall Health', style: tt.titleLarge),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text('Overall Health', style: tt.titleLarge),
+                    ),
+                    ReportExportButton(
+                      session: session,
+                      response: response,
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 _HealthChip(
                   label: response.healthLabel,
-                  score: response.healthScore,
+                  color: response.statusColor,
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -331,7 +388,7 @@ class _HealthSection extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 6),
-                _ConfidenceBar(confidence: response.confidence),
+                _ConfidenceBar(confidenceProgress: response.confidenceProgress),
               ],
             ),
           ),
@@ -342,16 +399,9 @@ class _HealthSection extends StatelessWidget {
 }
 
 class _HealthChip extends StatelessWidget {
-  const _HealthChip({required this.label, required this.score});
+  const _HealthChip({required this.label, required this.color});
   final String label;
-  final double score;
-
-  Color get _color {
-    if (score >= 8) return const Color(0xFF4CAF50);
-    if (score >= 6) return const Color(0xFFFFC107);
-    if (score >= 4) return const Color(0xFFFF9800);
-    return const Color(0xFFFF5252);
-  }
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -359,12 +409,12 @@ class _HealthChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
-        color: _color.withValues(alpha: 0.18),
+        color: color.withValues(alpha: 0.18),
       ),
       child: Text(
         label,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: _color,
+              color: color,
               fontWeight: FontWeight.w600,
             ),
       ),
@@ -373,8 +423,8 @@ class _HealthChip extends StatelessWidget {
 }
 
 class _ConfidenceBar extends StatelessWidget {
-  const _ConfidenceBar({required this.confidence});
-  final double confidence;
+  const _ConfidenceBar({required this.confidenceProgress});
+  final double confidenceProgress;
 
   @override
   Widget build(BuildContext context) {
@@ -383,7 +433,7 @@ class _ConfidenceBar extends StatelessWidget {
       child: SizedBox(
         height: 6,
         child: LinearProgressIndicator(
-          value: confidence.clamp(0, 1),
+          value: confidenceProgress.clamp(0, 1),
           backgroundColor: AppColors.surfaceHighlight,
           color: AppColors.accent.withValues(alpha: 0.7),
         ),
@@ -397,8 +447,8 @@ class _ConfidenceBar extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _SubScoresSection extends StatelessWidget {
-  const _SubScoresSection({required this.subScores});
-  final Map<String, double> subScores;
+  const _SubScoresSection({required this.response});
+  final AiDiagnosticResponse response;
 
   @override
   Widget build(BuildContext context) {
@@ -417,8 +467,12 @@ class _SubScoresSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          for (final e in subScores.entries) ...[
-            _ScoreBar(label: e.key, score: e.value),
+          for (final e in response.normalizedSubScores.entries) ...[
+            _ScoreBar(
+              label: e.key,
+              score: e.value,
+              usesHundredPointScale: response.usesHundredPointScale,
+            ),
             const SizedBox(height: 10),
           ],
         ],
@@ -428,11 +482,22 @@ class _SubScoresSection extends StatelessWidget {
 }
 
 class _ScoreBar extends StatelessWidget {
-  const _ScoreBar({required this.label, required this.score});
+  const _ScoreBar({
+    required this.label,
+    required this.score,
+    required this.usesHundredPointScale,
+  });
   final String label;
   final double score;
+  final bool usesHundredPointScale;
 
   Color get _barColor {
+    if (usesHundredPointScale) {
+      if (score >= 80) return const Color(0xFF4CAF50);
+      if (score >= 60) return const Color(0xFFFFC107);
+      if (score >= 40) return const Color(0xFFFF9800);
+      return const Color(0xFFFF5252);
+    }
     if (score >= 8) return const Color(0xFF4CAF50);
     if (score >= 6) return const Color(0xFFFFC107);
     if (score >= 4) return const Color(0xFFFF9800);
@@ -442,7 +507,9 @@ class _ScoreBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final pct = (score / 10).clamp(0.0, 1.0);
+    final pct = usesHundredPointScale
+        ? (score / 100).clamp(0.0, 1.0)
+        : (score / 10).clamp(0.0, 1.0);
 
     return Row(
       children: [
@@ -482,9 +549,11 @@ class _ScoreBar extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         SizedBox(
-          width: 32,
+          width: usesHundredPointScale ? 38 : 32,
           child: Text(
-            score.toStringAsFixed(1),
+            usesHundredPointScale
+                ? score.round().toString()
+                : score.toStringAsFixed(1),
             style: tt.bodySmall?.copyWith(
               color: _barColor,
               fontWeight: FontWeight.w700,
@@ -502,8 +571,8 @@ class _ScoreBar extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _RadarSection extends StatelessWidget {
-  const _RadarSection({required this.subScores});
-  final Map<String, double> subScores;
+  const _RadarSection({required this.response});
+  final AiDiagnosticResponse response;
 
   @override
   Widget build(BuildContext context) {
@@ -528,9 +597,11 @@ class _RadarSection extends StatelessWidget {
               child: CustomPaint(
                 size: const Size(220, 220),
                 painter: _RadarPainter(
-                  labels: subScores.keys.toList(),
-                  values: subScores.values
-                      .map((v) => (v / 10).clamp(0.0, 1.0))
+                  labels: response.normalizedSubScores.keys.toList(),
+                  values: response.normalizedSubScores.values
+                      .map((v) => response.usesHundredPointScale
+                          ? (v / 100).clamp(0.0, 1.0)
+                          : (v / 10).clamp(0.0, 1.0))
                       .toList(),
                   accentColor: AppColors.accent,
                 ),
@@ -905,6 +976,208 @@ class _SymptomsSection extends StatelessWidget {
 // Metadata footer
 // ═══════════════════════════════════════════════════════════════════════════════
 
+class _LiveConversationSection extends StatelessWidget {
+  const _LiveConversationSection({required this.session});
+
+  final DiagnosticSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return ListenableBuilder(
+      listenable: ConversationService.instance,
+      builder: (context, _) {
+        final thread = ConversationService.instance.threadForSession(session.id);
+        final messageCount = thread?.messages.length ?? 0;
+
+        return NeuPane(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF4CAF50).withValues(alpha: 0.14),
+                    ),
+                    child: const Icon(
+                      Icons.videocam_rounded,
+                      color: Color(0xFF4CAF50),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Saved Gemini Live Session', style: tt.titleLarge),
+                        const SizedBox(height: 4),
+                        Text(
+                          messageCount > 0
+                              ? '$messageCount saved message${messageCount == 1 ? '' : 's'}'
+                              : 'No saved turns yet',
+                          style: tt.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                thread?.previewText ??
+                    'This Gemini Live session is stored locally and can be continued with text, voice, or attachments.',
+                style: tt.bodyMedium,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PastConversationsSection extends StatelessWidget {
+  const _PastConversationsSection({required this.session});
+
+  final DiagnosticSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return ListenableBuilder(
+      listenable: ConversationService.instance,
+      builder: (context, _) {
+        final thread = ConversationService.instance.threadForSession(session.id);
+        final hasThread = thread != null && thread.messages.isNotEmpty;
+
+        return NeuPane(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.forum_rounded,
+                    size: 18,
+                    color: AppColors.accent,
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Past Conversations', style: tt.titleMedium),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (hasThread)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: AppColors.surfaceHighlight.withValues(alpha: 0.35),
+                    border: Border.all(
+                      color: const Color(0x12FFFFFF),
+                      width: 0.6,
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppColors.accent.withValues(alpha: 0.12),
+                        ),
+                        child: const Icon(
+                          Icons.chat_bubble_outline_rounded,
+                          size: 18,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              thread.previewText,
+                              style: tt.bodyMedium,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Updated ${_formatThreadTimestamp(thread.updatedAt)}',
+                              style: tt.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      GestureDetector(
+                        onTap: () => openConversationChat(
+                          context,
+                          session: session,
+                        ),
+                        child: Text(
+                          'Continue',
+                          style: tt.bodySmall?.copyWith(
+                            color: AppColors.accent,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        session.type == DiagnosticType.live
+                            ? 'No saved turns yet. Start chatting to keep this Gemini Live session around.'
+                            : 'No follow-up conversation yet. Start one to keep asking questions about this diagnosis.',
+                        style: tt.bodyMedium,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: () => openConversationChat(
+                        context,
+                        session: session,
+                      ),
+                      child: Text(
+                        'Start Conversation',
+                        style: tt.bodySmall?.copyWith(
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatThreadTimestamp(DateTime updatedAt) {
+    final day = updatedAt.day.toString().padLeft(2, '0');
+    final month = updatedAt.month.toString().padLeft(2, '0');
+    final hour = updatedAt.hour.toString().padLeft(2, '0');
+    final minute = updatedAt.minute.toString().padLeft(2, '0');
+    return '$day/$month $hour:$minute';
+  }
+}
+
 class _MetadataSection extends StatelessWidget {
   const _MetadataSection({required this.session});
   final DiagnosticSession session;
@@ -922,8 +1195,24 @@ class _MetadataSection extends StatelessWidget {
           const SizedBox(height: 8),
           _MetaRow('Report ID', session.id),
           _MetaRow('Type',
-              session.type == DiagnosticType.urgent ? 'Urgent' : 'Photo'),
-          _MetaRow('Severity', session.severityLabel),
+              switch (session.type) {
+                DiagnosticType.urgent => 'Urgent',
+                DiagnosticType.photo => 'Photo',
+                DiagnosticType.invoiceAudit => 'Invoice Audit',
+                DiagnosticType.live => 'Gemini Live',
+              }),
+          _MetaRow(
+            session.type == DiagnosticType.invoiceAudit
+                ? 'Assessment'
+                : session.type == DiagnosticType.live
+                    ? 'Session'
+                    : 'Severity',
+            session.type == DiagnosticType.invoiceAudit
+                ? (session.aiResponseJson?['verdict'] as String? ?? 'Audit')
+                : session.type == DiagnosticType.live
+                    ? 'Conversation'
+                : session.severityLabel,
+          ),
           _MetaRow('Date', '${session.dateLabel} ${session.timeLabel}'),
           if (session.description != null && session.description!.isNotEmpty)
             _MetaRow('Description', session.description!),

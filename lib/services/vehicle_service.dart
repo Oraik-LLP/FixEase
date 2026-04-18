@@ -32,6 +32,20 @@ class VehicleService extends ChangeNotifier {
     await _persist();
   }
 
+  Future<void> upsert(Vehicle vehicle) async {
+    final index = _vehicles.indexWhere((item) => item.id == vehicle.id);
+    if (index == -1) {
+      _vehicles.insert(0, vehicle);
+    } else {
+      _vehicles[index] = vehicle;
+    }
+    if (_selected?.id == vehicle.id) {
+      _selected = vehicle;
+    }
+    notifyListeners();
+    await _persist();
+  }
+
   Future<void> remove(String id) async {
     _vehicles.removeWhere((v) => v.id == id);
     if (_selected?.id == id) {

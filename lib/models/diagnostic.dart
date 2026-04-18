@@ -1,4 +1,4 @@
-enum DiagnosticType { urgent, photo }
+enum DiagnosticType { urgent, photo, invoiceAudit, live }
 enum Severity { low, medium, high, critical }
 
 class SymptomCategory {
@@ -119,6 +119,13 @@ class DiagnosticSession {
         Severity.medium => 'Medium',
         Severity.high => 'High',
         Severity.critical => 'Critical',
+      };
+
+  String get typeTitle => switch (type) {
+        DiagnosticType.urgent => 'Urgent Diagnosis',
+        DiagnosticType.photo => 'Photo Diagnosis',
+        DiagnosticType.invoiceAudit => 'Invoice Audit',
+        DiagnosticType.live => 'Gemini Live',
       };
 
   String get dateLabel {

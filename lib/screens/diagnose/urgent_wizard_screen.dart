@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../models/ai_response.dart';
 import '../../models/diagnostic.dart';
+import '../conversations/conversation_chat_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/ai_loading_view.dart';
 import '../../widgets/health_score_card.dart';
 import '../../widgets/neuomorphic.dart';
 
@@ -29,6 +31,7 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
   };
   bool _submitting = false;
   AiDiagnosticResponse? _result;
+  DiagnosticSession? _session;
 
   bool get _canProceed => switch (_step) {
         0 => _selectedSymptoms.isNotEmpty,
@@ -97,6 +100,7 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
       if (!mounted) return;
       setState(() {
         _result = response;
+        _session = session;
         _submitting = false;
       });
     } catch (e) {
@@ -399,28 +403,22 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
   // ── Submitting spinner ──────────────────────────────────────────────────
 
   Widget _buildSubmitting(TextTheme tt) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 80,
-            height: 80,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              color: AppColors.accent,
-              backgroundColor: AppColors.surfaceHighlight,
-            ),
-          ),
-          const SizedBox(height: 28),
-          Text('Analyzing…', style: tt.headlineMedium),
-          const SizedBox(height: 8),
-          Text(
-            'Our AI is reviewing your symptoms',
-            style: tt.bodyMedium,
-          ),
-        ],
-      ),
+    return const AiLoadingView(
+      title: 'Building Your Diagnosis',
+      subtitle:
+          'FixEase is reviewing the symptom pattern, urgency, and likely system overlap before it finalizes the report.',
+      stages: [
+        'Reviewing symptom combinations',
+        'Checking the most likely affected systems',
+        'Writing your plain-English summary',
+        'Preparing the full report and next steps',
+      ],
+      tips: [
+        'Specific symptoms together usually narrow the problem faster than one symptom alone.',
+        'A flashing warning light is usually more urgent than a steady one.',
+        'Tell the mechanic when the issue happens most: cold start, idle, turning, braking, or highway speed.',
+        'Strange noises plus drivability issues often point to the same root system.',
+      ],
     );
   }
 
@@ -461,8 +459,27 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
           ),
           const SizedBox(height: 16),
 
-          DiagnosticResultCard(response: _result!),
+          DiagnosticResultCard(
+            response: _result!,
+            session: _session,
+          ),
 
+          if (_session != null) ...[
+            const SizedBox(height: 12),
+            DiagnosticClarifyingQuestionPrompt(
+              response: _result!,
+              session: _session!,
+            ),
+            const SizedBox(height: 12),
+            NeuSecondaryButton(
+              label: 'Continue Conversation',
+              icon: Icons.forum_rounded,
+              onPressed: () => openConversationChat(
+                context,
+                session: _session!,
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
           NeuPrimaryButton(
             label: 'Done',

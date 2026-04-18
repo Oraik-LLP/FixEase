@@ -16,3 +16,4 @@ ios/Pods/
 
 # Secrets
 .env
+.*

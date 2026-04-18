@@ -1,15 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import '../config/ai_config.dart';
+import '../models/conversation.dart';
+import '../models/diagnostic.dart';
 import '../models/vehicle.dart';
+import 'conversation_service.dart';
+import 'diagnostic_service.dart';
 
 enum LiveSessionState { idle, connecting, streaming, analyzing, done, error }
 
@@ -19,73 +22,46 @@ class LiveMessage {
     required this.isUser,
     this.timestamp,
   });
+
   final String text;
   final bool isUser;
   final DateTime? timestamp;
 }
 
 class GeminiLiveService extends ChangeNotifier {
-  GeminiLiveService._();
+  GeminiLiveService._() {
+    _tts = FlutterTts();
+    _tts.setLanguage('en-US');
+    _tts.setSpeechRate(0.5);
+    _tts.setPitch(1.0);
+    _tts.awaitSpeakCompletion(true);
+  }
+
   static final instance = GeminiLiveService._();
 
   LiveSessionState _state = LiveSessionState.idle;
   final List<LiveMessage> _messages = [];
-  final List<Uint8List> _capturedFrames = [];
   String? _errorMessage;
   Vehicle? _vehicle;
   DateTime? _sessionStart;
+  DiagnosticSession? _historySession;
+
+  final AudioRecorder _recorder = AudioRecorder();
+  late final FlutterTts _tts;
+  bool _isRecording = false;
+  bool _isSpeaking = false;
 
   LiveSessionState get state => _state;
   List<LiveMessage> get messages => List.unmodifiable(_messages);
   String? get errorMessage => _errorMessage;
+  bool get isRecording => _isRecording;
+  bool get isSpeaking => _isSpeaking;
   bool get isActive =>
       _state == LiveSessionState.streaming ||
       _state == LiveSessionState.analyzing;
   Duration get sessionDuration => _sessionStart != null
       ? DateTime.now().difference(_sessionStart!)
       : Duration.zero;
-
-  WebSocketChannel? _channel;
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  final AudioRecorder _audioRecorder = AudioRecorder();
-  final List<Uint8List> _audioQueue = [];
-  bool _isPlaying = false;
-
-  Uint8List _addWavHeader(Uint8List pcmData, int sampleRate) {
-    int byteRate = sampleRate * 2;
-    final header = ByteData(44);
-    header.setUint32(0, 0x52494646, Endian.big); 
-    header.setUint32(4, 36 + pcmData.length, Endian.little);
-    header.setUint32(8, 0x57415645, Endian.big); 
-    header.setUint32(12, 0x666d7420, Endian.big); 
-    header.setUint32(16, 16, Endian.little); 
-    header.setUint16(20, 1, Endian.little); 
-    header.setUint16(22, 1, Endian.little); 
-    header.setUint32(24, sampleRate, Endian.little); 
-    header.setUint32(28, byteRate, Endian.little); 
-    header.setUint16(32, 2, Endian.little); 
-    header.setUint16(34, 16, Endian.little); 
-    header.setUint32(36, 0x64617461, Endian.big); 
-    header.setUint32(40, pcmData.length, Endian.little); 
-    
-    final wavBytes = Uint8List(44 + pcmData.length);
-    wavBytes.setAll(0, header.buffer.asUint8List());
-    wavBytes.setAll(44, pcmData);
-    return wavBytes;
-  }
-
-  Future<void> _processAudioQueue() async {
-    if (_isPlaying || _audioQueue.isEmpty) return;
-    _isPlaying = true;
-    final chunk = _audioQueue.removeAt(0);
-    final wavBytes = _addWavHeader(chunk, 24000);
-    
-    await _audioPlayer.play(BytesSource(wavBytes));
-    _audioPlayer.onPlayerComplete.first.then((_) {
-      _isPlaying = false;
-      _processAudioQueue();
-    });
-  }
 
   static Future<DeviceCapability> checkCapability() async {
     final hasCamera = Platform.isAndroid || Platform.isIOS;
@@ -113,9 +89,9 @@ class GeminiLiveService extends ChangeNotifier {
   Future<void> startSession(Vehicle vehicle) async {
     _vehicle = vehicle;
     _messages.clear();
-    _capturedFrames.clear();
     _errorMessage = null;
     _sessionStart = DateTime.now();
+    _historySession = null;
     _state = LiveSessionState.connecting;
     notifyListeners();
 
@@ -126,221 +102,327 @@ class GeminiLiveService extends ChangeNotifier {
       return;
     }
 
+    _state = LiveSessionState.streaming;
+    _addStatusMessage(
+      'Session started. Tap the mic button to speak, or type a message.\nTap the camera strip to share a photo.',
+    );
+    notifyListeners();
+
+    await _sendToBackend(
+      text: 'Greet the user briefly and ask what car issue they are experiencing.',
+    );
+  }
+
+  Future<void> toggleRecording() async {
+    if (_state == LiveSessionState.analyzing) return;
+
+    if (_isRecording) {
+      await _stopAndSend();
+    } else {
+      await _startRecording();
+    }
+  }
+
+  Future<void> _startRecording() async {
+    if (!await _recorder.hasPermission()) return;
+
+    if (_isSpeaking) {
+      await _tts.stop();
+      _isSpeaking = false;
+    }
+
+    final dir = await getTemporaryDirectory();
+    final path =
+        '${dir.path}/fixease_voice_${DateTime.now().millisecondsSinceEpoch}.wav';
+
+    await _recorder.start(
+      const RecordConfig(
+        encoder: AudioEncoder.wav,
+        sampleRate: 16000,
+        numChannels: 1,
+        echoCancel: true,
+        noiseSuppress: true,
+        autoGain: true,
+      ),
+      path: path,
+    );
+
+    _isRecording = true;
+    notifyListeners();
+  }
+
+  Future<void> _stopAndSend() async {
+    final path = await _recorder.stop();
+    _isRecording = false;
+    notifyListeners();
+
+    if (path == null) return;
+
+    final file = File(path);
+    if (!await file.exists()) return;
+
+    final bytes = await file.readAsBytes();
+    if (bytes.length < 1000) {
+      await file.delete();
+      return;
+    }
+
+    _addUserMessage('Voice message');
+    await _persistUserTurn(
+      text: 'Voice note',
+      source: ConversationMessageSource.audio,
+    );
+    _state = LiveSessionState.analyzing;
+    notifyListeners();
+
+    await _sendToBackend(
+      audioData: base64Encode(bytes),
+      audioMimeType: 'audio/wav',
+    );
+
     try {
-      final wsUrl = AiConfig.endpoint('/api/live/stream').toString().replaceFirst('http', 'ws');
-      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-      
-      _channel!.stream.listen(
-        (data) {
-          try {
-            final payload = jsonDecode(data as String);
-            if (payload['serverContent'] != null) {
-              final content = payload['serverContent'];
-              
-              if (content['modelTurn'] != null && content['modelTurn']['parts'] != null) {
-                final parts = content['modelTurn']['parts'] as List;
-                for (final part in parts) {
-                  if (part['inlineData'] != null && part['inlineData']['data'] != null) {
-                    final audioBytes = base64Decode(part['inlineData']['data']);
-                    _audioQueue.add(audioBytes);
-                    _processAudioQueue();
-                  }
-                }
-              }
+      await file.delete();
+    } catch (_) {}
+  }
 
-              if (content['interrupted'] == true) {
-                _audioQueue.clear();
-                _audioPlayer.stop();
-                _isPlaying = false;
-              }
+  Future<void> sendImage(Uint8List jpegBytes) async {
+    if (!isActive) return;
 
-              if (content['inputTranscription'] != null && content['inputTranscription']['text'] != null) {
-                final txt = content['inputTranscription']['text'];
-                if (txt.isNotEmpty) _appendTranscript(txt, isUser: true);
-              }
-              if (content['outputTranscription'] != null && content['outputTranscription']['text'] != null) {
-                final txt = content['outputTranscription']['text'];
-                if (txt.isNotEmpty) _appendTranscript(txt, isUser: false);
-              }
+    _addUserMessage('Photo sent');
+    await _persistUserTurn(
+      text: 'Photo attached',
+      source: ConversationMessageSource.image,
+    );
+    _state = LiveSessionState.analyzing;
+    notifyListeners();
 
-              if (_state == LiveSessionState.analyzing) {
-                _state = LiveSessionState.streaming;
-              }
-              notifyListeners();
-            }
-          } catch (_) {}
-        },
-        onError: (err) {
-          _addSystemMessage('WebSocket Error: $err');
-          _state = LiveSessionState.error;
-          notifyListeners();
-        },
-        onDone: () {
-          _state = LiveSessionState.done;
-          notifyListeners();
-        },
-      );
-      
-      _state = LiveSessionState.streaming;
-      _addSystemMessage(
-        'Live stream connected. Point your camera at the area of concern and describe what you see.',
-      );
-      notifyListeners();
-      
-      // Send initial context
-      _channel!.sink.add(jsonEncode({
-        "realtimeInput": {
-          "text": "Begin diagnostic session for ${_vehicle?.displayName ?? 'car'} (${_vehicle?.mileageKm ?? 0} km)."
-        }
-      }));
+    await _sendToBackend(
+      text: 'The user sent a photo of their car issue. Analyze it and describe what you see.',
+      imageData: base64Encode(jpegBytes),
+      imageMimeType: 'image/jpeg',
+    );
+  }
 
-      // Start Microphone
-      if (await _audioRecorder.hasPermission()) {
-        final stream = await _audioRecorder.startStream(const RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: 16000,
-          numChannels: 1,
-          echoCancel: true,
-          noiseSuppress: true,
-          autoGain: true,
-        ));
-        stream.listen((data) {
-          if (_state == LiveSessionState.streaming && _channel != null) {
-            _channel!.sink.add(jsonEncode({
-              "realtimeInput": {
-                "audio": {
-                  "mimeType": "audio/pcm;rate=16000",
-                  "data": base64Encode(data)
-                }
+  Future<void> sendText(String text) async {
+    if (!isActive) return;
+
+    _addUserMessage(text);
+    await _persistUserTurn(
+      text: text,
+      source: ConversationMessageSource.text,
+    );
+    _state = LiveSessionState.analyzing;
+    notifyListeners();
+
+    await _sendToBackend(text: text);
+  }
+
+  Future<void> _sendToBackend({
+    String? text,
+    String? audioData,
+    String? audioMimeType,
+    String? imageData,
+    String? imageMimeType,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'vehicle': _vehicle != null
+            ? {
+                'display_name': _vehicle!.displayName,
+                'fuel_label': _vehicle!.fuelLabel,
+                'mileage_km': _vehicle!.mileageKm,
               }
-            }));
-          }
-        });
+            : null,
+        'history': _messages
+            .where(
+              (message) =>
+                  message.text != 'Voice message' &&
+                  message.text != 'Photo sent' &&
+                  !message.text.startsWith('Session started.'),
+            )
+            .map(
+              (message) => {
+                'role': message.isUser ? 'user' : 'assistant',
+                'text': message.text,
+              },
+            )
+            .toList(),
+      };
+
+      if (text != null && audioData == null) {
+        body['history'] = [
+          ...body['history'] as List,
+          {'role': 'user', 'text': text},
+        ];
       }
 
-    } catch (e) {
-      _errorMessage = 'Failed to connect: $e';
-      _state = LiveSessionState.error;
+      if (audioData != null && audioMimeType != null) {
+        body['audio'] = {
+          'data': audioData,
+          'mimeType': audioMimeType,
+        };
+      }
+
+      if (imageData != null && imageMimeType != null) {
+        body['image'] = {
+          'data': imageData,
+          'mimeType': imageMimeType,
+        };
+      }
+
+      final response = await http
+          .post(
+            AiConfig.endpoint('/api/live/voice'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final responseText = data['text'] as String? ??
+            'I could not process that. Please try again.';
+
+        _addAssistantMessage(responseText);
+        await _persistAssistantTurn(responseText);
+        _state = LiveSessionState.streaming;
+        notifyListeners();
+
+        _isSpeaking = true;
+        notifyListeners();
+        await _tts.speak(responseText);
+        _isSpeaking = false;
+        notifyListeners();
+      } else {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final message = 'Error: ${data['message'] ?? 'Request failed'}';
+        _addAssistantMessage(message);
+        await _persistAssistantTurn(message);
+        _state = LiveSessionState.streaming;
+        notifyListeners();
+      }
+    } catch (_) {
+      const message = 'Connection error. Please try again.';
+      _addAssistantMessage(message);
+      await _persistAssistantTurn(message);
+      _state = LiveSessionState.streaming;
       notifyListeners();
     }
   }
 
-  void sendFrame(Uint8List jpegBytes, String userMessage) {
-    if (_state != LiveSessionState.streaming || _channel == null) return;
-
-    _capturedFrames.add(jpegBytes);
-    _addUserMessage(userMessage);
-    _state = LiveSessionState.analyzing;
-    notifyListeners();
-
-    _channel!.sink.add(jsonEncode({
-      "realtimeInput": {
-        "text": userMessage
-      }
-    }));
-    
-    _channel!.sink.add(jsonEncode({
-      "realtimeInput": {
-        "video": {
-          "mimeType": "image/jpeg",
-          "data": base64Encode(jpegBytes)
-        }
-      }
-    }));
-  }
-
-  void sendText(String text) {
-    if (!isActive || _channel == null) return;
-
-    _addUserMessage(text);
-    _state = LiveSessionState.analyzing;
-    notifyListeners();
-
-    _channel!.sink.add(jsonEncode({
-      "realtimeInput": {
-        "text": text
-      }
-    }));
-  }
-
   void endSession() {
     if (_state == LiveSessionState.idle) return;
-    _addSystemMessage('Session ended. Review your conversation.');
-    _audioRecorder.stop();
-    _audioPlayer.stop();
-    _channel?.sink.close();
-    _channel = null;
+    _addStatusMessage('Session ended.');
+    _teardown();
     _state = LiveSessionState.done;
     notifyListeners();
   }
 
   void reset() {
-    _audioRecorder.stop();
-    _audioPlayer.stop();
-    _channel?.sink.close();
-    _channel = null;
+    _teardown();
     _state = LiveSessionState.idle;
     _messages.clear();
-    _capturedFrames.clear();
     _errorMessage = null;
     _vehicle = null;
     _sessionStart = null;
+    _historySession = null;
     notifyListeners();
   }
 
-  Map<String, dynamic>? _vehiclePayload(Vehicle? vehicle) {
-    if (vehicle == null) return null;
-    return {
-      'display_name': vehicle.displayName,
-      'fuel_label': vehicle.fuelLabel,
-      'mileage_km': vehicle.mileageKm,
-      'last_service_date': vehicle.lastServiceDate?.toIso8601String(),
-    };
-  }
-
-  List<Map<String, dynamic>> _historyPayload() {
-    return _messages
-        .map((m) => {
-              'role': m.isUser ? 'user' : 'assistant',
-              'text': m.text,
-            })
-        .toList();
+  void _teardown() {
+    _recorder.stop();
+    _tts.stop();
+    _isRecording = false;
+    _isSpeaking = false;
   }
 
   void _addUserMessage(String text) {
-    _messages.add(LiveMessage(
-      text: text,
-      isUser: true,
-      timestamp: DateTime.now(),
-    ));
-  }
-
-  void _appendTranscript(String text, {required bool isUser}) {
-    final now = DateTime.now();
-    if (_messages.isNotEmpty && 
-        _messages.last.isUser == isUser && 
-        now.difference(_messages.last.timestamp ?? now).inSeconds < 5) {
-      final last = _messages.last;
-      _messages[_messages.length - 1] = LiveMessage(
-        text: "${last.text} $text".trim(),
-        isUser: isUser,
-        timestamp: last.timestamp ?? now,
-      );
-    } else {
-      _messages.add(LiveMessage(
+    _messages.add(
+      LiveMessage(
         text: text,
-        isUser: isUser,
-        timestamp: now,
-      ));
-    }
+        isUser: true,
+        timestamp: DateTime.now(),
+      ),
+    );
   }
 
-  void _addSystemMessage(String text) {
-    _messages.add(LiveMessage(
-      text: text,
-      isUser: false,
-      timestamp: DateTime.now(),
-    ));
+  void _addAssistantMessage(String text) {
+    _messages.add(
+      LiveMessage(
+        text: text,
+        isUser: false,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  void _addStatusMessage(String text) {
+    _messages.add(
+      LiveMessage(
+        text: text,
+        isUser: false,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  Future<DiagnosticSession?> _ensureHistorySession() async {
+    if (_historySession != null) return _historySession;
+    final vehicle = _vehicle;
+    if (vehicle == null) return null;
+
+    final session = DiagnosticSession(
+      id: DateTime.now().microsecondsSinceEpoch.toRadixString(36),
+      vehicleId: vehicle.id,
+      type: DiagnosticType.live,
+      description: 'Gemini Live conversation',
+      vehicleName: vehicle.displayName,
+      createdAt: _sessionStart ?? DateTime.now(),
+    );
+
+    _historySession = session;
+    await DiagnosticService.instance.save(session);
+    await ConversationService.instance.createOrGetThread(
+      sessionId: session.id,
+      vehicleId: session.vehicleId,
+    );
+    return session;
+  }
+
+  Future<void> _persistUserTurn({
+    required String text,
+    required ConversationMessageSource source,
+  }) async {
+    final session = await _ensureHistorySession();
+    if (session == null) return;
+
+    await ConversationService.instance.appendMessage(
+      sessionId: session.id,
+      vehicleId: session.vehicleId,
+      message: ConversationMessage(
+        id: DateTime.now().microsecondsSinceEpoch.toRadixString(36),
+        role: ConversationMessageRole.user,
+        text: text,
+        createdAt: DateTime.now(),
+        source: source,
+      ),
+    );
+  }
+
+  Future<void> _persistAssistantTurn(String text) async {
+    final session = _historySession;
+    if (session == null) return;
+
+    await ConversationService.instance.appendMessage(
+      sessionId: session.id,
+      vehicleId: session.vehicleId,
+      message: ConversationMessage(
+        id: DateTime.now().microsecondsSinceEpoch.toRadixString(36),
+        role: ConversationMessageRole.assistant,
+        text: text,
+        createdAt: DateTime.now(),
+      ),
+    );
   }
 }
 
@@ -350,6 +432,7 @@ class DeviceCapability {
     required this.hasNetwork,
     required this.hasBackend,
   });
+
   final bool hasCamera;
   final bool hasNetwork;
   final bool hasBackend;

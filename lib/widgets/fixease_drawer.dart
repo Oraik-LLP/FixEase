@@ -23,7 +23,7 @@ class FixEaseDrawer extends StatelessWidget {
   static const _items = <({int index, IconData icon, String label})>[
     (index: 0, icon: Icons.home_rounded, label: 'Home'),
     (index: 1, icon: Icons.support_rounded, label: 'Diagnose'),
-    (index: 2, icon: Icons.insights_rounded, label: 'Reports'),
+    (index: 2, icon: Icons.garage_rounded, label: 'Garage'),
     (index: 3, icon: Icons.person_rounded, label: 'Profile'),
   ];
 
