@@ -223,7 +223,20 @@ class _StepMake extends StatefulWidget {
 }
 
 class _StepMakeState extends State<_StepMake> {
+  late final TextEditingController _searchCtrl;
   String _search = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -243,10 +256,9 @@ class _StepMakeState extends State<_StepMake> {
         NeuTextField(
           hint: 'Search brands...',
           icon: Icons.search_rounded,
-          controller: TextEditingController.fromValue(
-            TextEditingValue(text: _search),
-          ),
+          controller: _searchCtrl,
           keyboardType: TextInputType.text,
+          onChanged: (value) => setState(() => _search = value.trim()),
         ),
         const SizedBox(height: 16),
         Wrap(
@@ -258,6 +270,7 @@ class _StepMakeState extends State<_StepMake> {
               label: make,
               selected: sel,
               onTap: () {
+                _searchCtrl.clear();
                 setState(() => _search = '');
                 widget.onSelect(make);
               },
@@ -382,7 +395,6 @@ class _StepDetails extends StatelessWidget {
         Text('Optional — helps us give better diagnostics',
             style: tt.bodyMedium),
         const SizedBox(height: 20),
-
         Text('Variant / Trim', style: tt.titleMedium),
         const SizedBox(height: 8),
         NeuTextField(
@@ -391,7 +403,6 @@ class _StepDetails extends StatelessWidget {
           onChanged: onVariant,
         ),
         const SizedBox(height: 18),
-
         Text('Fuel Type', style: tt.titleMedium),
         const SizedBox(height: 8),
         Wrap(
@@ -407,7 +418,6 @@ class _StepDetails extends StatelessWidget {
           }).toList(),
         ),
         const SizedBox(height: 18),
-
         Text('Mileage (km)', style: tt.titleMedium),
         const SizedBox(height: 8),
         NeuTextField(
@@ -417,7 +427,6 @@ class _StepDetails extends StatelessWidget {
           keyboardType: TextInputType.number,
         ),
         const SizedBox(height: 18),
-
         Text('Last Service Date', style: tt.titleMedium),
         const SizedBox(height: 8),
         GestureDetector(
@@ -487,8 +496,7 @@ class _ChipButton extends StatelessWidget {
         child: Text(
           label,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color:
-                    selected ? AppColors.accent : AppColors.textPrimary,
+                color: selected ? AppColors.accent : AppColors.textPrimary,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
               ),
         ),

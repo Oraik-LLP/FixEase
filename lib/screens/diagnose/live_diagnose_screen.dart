@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -8,7 +9,9 @@ import 'package:camera/camera.dart';
 import '../../config/feature_flags.dart';
 import '../../models/conversation.dart';
 import '../../models/diagnostic.dart';
+import '../../services/file_validation_service.dart';
 import '../../services/gemini_live_service.dart';
+import '../../services/quota_service.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
@@ -63,8 +66,24 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
         }
         if (mounted) setState(() {});
       }
-    } catch (_) {}
-    _cameraBusy = false;
+    } on CameraException catch (error) {
+      if (!mounted) return;
+      _showMessage(_cameraErrorMessage(error));
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      _showMessage(
+        error.code == 'CameraAccessDenied'
+            ? 'Camera access is required to capture live photos.'
+            : 'Could not start the camera. Please check camera permissions and try again.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage(
+        'Could not start the camera. Please check camera permissions and try again.',
+      );
+    } finally {
+      _cameraBusy = false;
+    }
   }
 
   bool _disposed = false;
@@ -87,6 +106,9 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _checking = false);
+      _showMessage(
+        'We could not verify live diagnosis readiness right now. Please try again shortly.',
+      );
     }
   }
 
@@ -131,15 +153,44 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     }
     if (_cameraCtrl == null || !_cameraCtrl!.value.isInitialized) return;
     HapticFeedback.heavyImpact();
+    String? capturedPath;
     try {
       final xfile = await _cameraCtrl!.takePicture();
+      capturedPath = xfile.path;
       if (!mounted) return;
-      final bytes = await xfile.readAsBytes();
+      final file = File(capturedPath);
+      final validation = await FileValidationService.validatePhoto(file);
+      if (!validation.isValid) {
+        _showMessage(validation.message ?? 'Could not use that photo.');
+        return;
+      }
+      final bytes =
+          await Isolate.run(() => File(capturedPath!).readAsBytesSync());
       if (!mounted) return;
-      GeminiLiveService.instance.sendImage(Uint8List.fromList(bytes));
+      await GeminiLiveService.instance.sendImage(Uint8List.fromList(bytes));
       _scrollToBottom();
+    } on CameraException catch (error) {
+      if (!mounted) return;
+      _showMessage(_cameraErrorMessage(error));
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      _showMessage(
+        error.code == 'CameraAccessDenied'
+            ? 'Camera access is required to capture live photos.'
+            : 'Could not capture a photo. Please try again.',
+      );
+    } on LiveSessionException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
     } catch (_) {
-      // Camera capture failed
+      if (!mounted) return;
+      _showMessage('Could not capture a photo. Please try again.');
+    } finally {
+      try {
+        if (capturedPath != null) {
+          await File(capturedPath).delete();
+        }
+      } catch (_) {}
     }
   }
 
@@ -178,7 +229,18 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
       return;
     }
     HapticFeedback.mediumImpact();
-    await GeminiLiveService.instance.toggleRecording();
+    try {
+      await GeminiLiveService.instance.toggleRecording();
+    } on LiveSessionPermissionException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+    } on LiveSessionException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Could not use the microphone. Please try again.');
+    }
     _scrollToBottom();
   }
 
@@ -210,6 +272,27 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
 
     if (mounted) setState(() {});
     await _initCamera();
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  String _cameraErrorMessage(CameraException error) {
+    switch (error.code) {
+      case 'CameraAccessDenied':
+      case 'CameraAccessDeniedWithoutPrompt':
+      case 'CameraAccessRestricted':
+        return 'Camera access is required to capture live photos during diagnosis.';
+      default:
+        return 'Could not use the camera right now. Please try again.';
+    }
   }
 
   @override
@@ -246,7 +329,8 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                         ),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(8),
-                          color: const Color(0xFF4CAF50).withValues(alpha: 0.15),
+                          color:
+                              const Color(0xFF4CAF50).withValues(alpha: 0.15),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -384,12 +468,12 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
               );
         final liveHardBlocked = limits?.liveHardBlocked ?? false;
         final liveImageBlocked = limits?.liveImageLimitReached ?? false;
-        final liveWarningText =
-            !SubscriptionService.instance.hasPremiumAccess &&
-                    (limits?.liveAudioRemaining ?? 99) <= 2 &&
-                    (limits?.liveAudioRemaining ?? 99) > 0
-                ? '${limits!.liveAudioRemaining} free voice turn${limits.liveAudioRemaining == 1 ? '' : 's'} remaining'
-                : null;
+        final liveWarningText = !SubscriptionService
+                    .instance.hasPremiumAccess &&
+                (limits?.liveAudioRemaining ?? 99) <= 2 &&
+                (limits?.liveAudioRemaining ?? 99) > 0
+            ? '${limits!.liveAudioRemaining} free voice turn${limits.liveAudioRemaining == 1 ? '' : 's'} remaining'
+            : null;
 
         if (svc.recordingCapEvents != _lastRecordingCapEvent) {
           _lastRecordingCapEvent = svc.recordingCapEvents;
@@ -484,7 +568,9 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                               details,
                               constraints.biggest,
                             ),
-                            onTap: isAnalyzing || liveHardBlocked || liveImageBlocked
+                            onTap: isAnalyzing ||
+                                    liveHardBlocked ||
+                                    liveImageBlocked
                                 ? () {
                                     ensureAccess(
                                       context,
@@ -556,7 +642,8 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 decoration: BoxDecoration(
                   color: AppColors.surface.withValues(alpha: 0.5),
-                  border: const Border(top: BorderSide(color: Color(0x0CFFFFFF))),
+                  border:
+                      const Border(top: BorderSide(color: Color(0x0CFFFFFF))),
                 ),
                 child: Row(
                   children: [
@@ -646,13 +733,14 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                                 : svc.recordingLimitLabel,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  fontSize: 10,
-                                  color: svc.isRecording &&
-                                          svc.isNearRecordingLimit
-                                      ? const Color(0xFFEF4444)
-                                      : AppColors.textTertiary,
-                                ),
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      fontSize: 10,
+                                      color: svc.isRecording &&
+                                              svc.isNearRecordingLimit
+                                          ? const Color(0xFFEF4444)
+                                          : AppColors.textTertiary,
+                                    ),
                           ),
                         ],
                       ),
@@ -672,6 +760,10 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                         hint: 'Type a message...',
                         icon: Icons.chat_rounded,
                         controller: _msgCtrl,
+                        keyboardType: TextInputType.multiline,
+                        minLines: 1,
+                        maxLines: 4,
+                        textInputAction: TextInputAction.newline,
                         readOnly: liveHardBlocked,
                         onTap: liveHardBlocked
                             ? () {
@@ -686,7 +778,6 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
                                 );
                               }
                             : null,
-                        onSubmitted: (_) => _sendText(),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1105,7 +1196,8 @@ class _ChatBubble extends StatelessWidget {
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: maxBubbleWidth),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.only(
                     topLeft: const Radius.circular(16),
@@ -1234,8 +1326,7 @@ class _TypingIndicatorState extends State<_TypingIndicator>
                 bottomRight: Radius.circular(16),
               ),
               color: AppColors.surface,
-              border: Border.all(
-                  color: const Color(0x0CFFFFFF), width: 0.5),
+              border: Border.all(color: const Color(0x0CFFFFFF), width: 0.5),
             ),
             child: AnimatedBuilder(
               animation: _ctrl,
@@ -1302,6 +1393,11 @@ Future<void> launchLiveDiagnosis(BuildContext context) async {
     return;
   }
 
+  final allowed = await QuotaService.instance.ensureCanStartDiagnosis(context);
+  if (!allowed || !context.mounted) {
+    return;
+  }
+
   GeminiLiveService.instance.reset();
   Navigator.of(context).push(MaterialPageRoute<void>(
     builder: (_) => const LiveDiagnoseScreen(),
@@ -1318,8 +1414,7 @@ Future<bool?> _showBetaDialog(BuildContext context) {
         children: [
           const Icon(Icons.science_rounded, color: AppColors.accent, size: 22),
           const SizedBox(width: 8),
-          Text('Beta Feature',
-              style: Theme.of(ctx).textTheme.titleLarge),
+          Text('Beta Feature', style: Theme.of(ctx).textTheme.titleLarge),
         ],
       ),
       content: Column(
@@ -1340,16 +1435,16 @@ Future<bool?> _showBetaDialog(BuildContext context) {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: Text('Not Now',
-              style: TextStyle(color: AppColors.textSecondary)),
+          child:
+              Text('Not Now', style: TextStyle(color: AppColors.textSecondary)),
         ),
         TextButton(
           onPressed: () {
             FeatureFlags.override('gemini_live_beta', true);
             Navigator.pop(ctx, true);
           },
-          child: const Text('Opt In',
-              style: TextStyle(color: AppColors.accent)),
+          child:
+              const Text('Opt In', style: TextStyle(color: AppColors.accent)),
         ),
       ],
     ),

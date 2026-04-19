@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 
@@ -10,6 +11,7 @@ import '../screens/subscription/paywall_screen.dart';
 import 'conversation_service.dart';
 import 'diagnostic_service.dart';
 import 'local_store_service.dart';
+import 'quota_service.dart';
 import 'trusted_time_service.dart';
 
 enum SubscriptionTier { free, emergencyPass, pro }
@@ -123,7 +125,8 @@ class ThreadUsage {
       };
 
   factory ThreadUsage.fromJson(Map<String, dynamic> json) {
-    final typeName = json['session_type'] as String? ?? DiagnosticType.urgent.name;
+    final typeName =
+        json['session_type'] as String? ?? DiagnosticType.urgent.name;
     final type = DiagnosticType.values.firstWhere(
       (value) => value.name == typeName,
       orElse: () => DiagnosticType.urgent,
@@ -242,7 +245,8 @@ class SubscriptionService extends ChangeNotifier {
   DemoSubscriptionState _demoState = DemoSubscriptionState.mockFree;
   DateTime? _emergencyExpiresAt;
   int _diagnosticsThisMonth = 0;
-  DateTime _monthStart = DateTime.utc(DateTime.now().year, DateTime.now().month);
+  DateTime _monthStart =
+      DateTime.utc(DateTime.now().year, DateTime.now().month);
   DateTime? _lastTrustedUtc;
   final Map<String, ThreadUsage> _threadUsage = {};
 
@@ -251,6 +255,7 @@ class SubscriptionService extends ChangeNotifier {
   bool _configuredPurchases = false;
   bool _isPurchasing = false;
   bool _isRestoring = false;
+  String? _lastSyncErrorMessage;
 
   SubscriptionTier get tier => _tier;
   DemoSubscriptionState get demoState => _demoState;
@@ -259,6 +264,7 @@ class SubscriptionService extends ChangeNotifier {
   CustomerInfo? get customerInfo => _customerInfo;
   bool get isPurchasing => _isPurchasing;
   bool get isRestoring => _isRestoring;
+  String? get lastSyncErrorMessage => _lastSyncErrorMessage;
   bool get isDemoMode => AppConfig.isDemoMode;
 
   int get diagnosticsThisMonth => _diagnosticsThisMonth;
@@ -294,7 +300,8 @@ class SubscriptionService extends ChangeNotifier {
         SubscriptionTier.pro => 'Pro Driver',
       };
 
-  String get statusLabel => AppConfig.isDemoMode ? 'Demo - $tierLabel' : tierLabel;
+  String get statusLabel =>
+      AppConfig.isDemoMode ? 'Demo - $tierLabel' : tierLabel;
 
   String get tierBadge => switch (_tier) {
         SubscriptionTier.free => '',
@@ -304,7 +311,6 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> restore() async {
     await _loadPersisted();
-    _expireEmergencyIfNeeded();
     _syncThreadUsageFromLocalData();
     await refreshMonthlyCreditsForDisplay();
 
@@ -314,12 +320,10 @@ class SubscriptionService extends ChangeNotifier {
       return;
     }
 
-    await _configurePurchasesIfNeeded();
-    await refresh();
+    await _refreshStoreState(includeOfferings: true, source: 'restore');
   }
 
   Future<void> refresh() async {
-    _expireEmergencyIfNeeded();
     _syncThreadUsageFromLocalData();
     await refreshMonthlyCreditsForDisplay();
 
@@ -329,17 +333,7 @@ class SubscriptionService extends ChangeNotifier {
       return;
     }
 
-    await _configurePurchasesIfNeeded();
-    try {
-      _offerings = await Purchases.getOfferings();
-    } catch (_) {}
-
-    try {
-      final info = await Purchases.getCustomerInfo();
-      _applyCustomerInfo(info);
-    } catch (_) {}
-
-    notifyListeners();
+    await _refreshStoreState(includeOfferings: true, source: 'refresh');
   }
 
   Future<bool> purchaseProduct(SubscriptionProductType type) async {
@@ -364,10 +358,16 @@ class SubscriptionService extends ChangeNotifier {
       if (livePackage == null) return false;
 
       final info = await Purchases.purchasePackage(livePackage);
+      _lastSyncErrorMessage = null;
       _applyCustomerInfo(info);
       notifyListeners();
       return true;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _recordSyncFailure(
+        source: 'purchaseProduct',
+        error: error,
+        stackTrace: stackTrace,
+      );
       return false;
     } finally {
       _isPurchasing = false;
@@ -395,8 +395,22 @@ class SubscriptionService extends ChangeNotifier {
       }
 
       await _configurePurchasesIfNeeded();
+      if (!_configuredPurchases) {
+        _applyStrictEntitlementFallback(clearCustomerInfo: true);
+        _lastSyncErrorMessage =
+            'Subscription status could not be verified because RevenueCat is not configured.';
+        return;
+      }
       final info = await Purchases.restorePurchases();
+      _lastSyncErrorMessage = null;
       _applyCustomerInfo(info);
+    } catch (error, stackTrace) {
+      _applyStrictEntitlementFallback(clearCustomerInfo: true);
+      _recordSyncFailure(
+        source: 'restorePurchases',
+        error: error,
+        stackTrace: stackTrace,
+      );
     } finally {
       _isRestoring = false;
       notifyListeners();
@@ -417,17 +431,13 @@ class SubscriptionService extends ChangeNotifier {
       _demoState = DemoSubscriptionState.mockFree;
       _emergencyExpiresAt = null;
     }
+    await QuotaService.instance.resetForTesting();
     await _persist();
     notifyListeners();
   }
 
   Future<void> recordDiagnosis() async {
-    await refreshMonthlyCreditsForDisplay();
-    if (_tier == SubscriptionTier.free) {
-      _diagnosticsThisMonth++;
-      notifyListeners();
-      await _persist();
-    }
+    notifyListeners();
   }
 
   Future<void> recordLiveDiagnosisIfNeeded({
@@ -436,13 +446,7 @@ class SubscriptionService extends ChangeNotifier {
     final usage = _threadUsage[sessionId];
     if (usage == null || usage.diagnosisCreditConsumed) return;
 
-    await refreshMonthlyCreditsForDisplay();
-    if (_tier == SubscriptionTier.free) {
-      _diagnosticsThisMonth++;
-    }
-
-    _threadUsage[sessionId] =
-        usage.copyWith(diagnosisCreditConsumed: true);
+    _threadUsage[sessionId] = usage.copyWith(diagnosisCreditConsumed: true);
     notifyListeners();
     await _persist();
   }
@@ -453,11 +457,10 @@ class SubscriptionService extends ChangeNotifier {
       await _applyMonthReference(trustedUtc, rememberTrusted: true);
       return;
     }
-
-    // Generous fallback: if trusted time is unavailable, allow a forward-only
-    // device-month refresh so users still see their monthly reset instead of
-    // getting stuck with stale credits.
-    await _applyMonthReference(DateTime.now().toUtc());
+    debugPrint(
+      'SubscriptionService: trusted time unavailable, monthly free-credit '
+      'reset remains locked to the last verified period.',
+    );
   }
 
   bool checkAccess(
@@ -485,33 +488,43 @@ class SubscriptionService extends ChangeNotifier {
       case FeatureType.extendedLiveAudio:
         return hasPremiumAccess;
       case FeatureType.standardFollowUpMessage:
-        if (resolvedSessionId == null || resolvedThreadType == null) return false;
+        if (resolvedSessionId == null || resolvedThreadType == null) {
+          return false;
+        }
         return !threadLimitStatus(
           sessionId: resolvedSessionId,
           sessionType: resolvedThreadType,
         ).textAudioLimitReached;
       case FeatureType.standardFollowUpMedia:
-        if (resolvedSessionId == null || resolvedThreadType == null) return false;
+        if (resolvedSessionId == null || resolvedThreadType == null) {
+          return false;
+        }
         return !threadLimitStatus(
           sessionId: resolvedSessionId,
           sessionType: resolvedThreadType,
         ).standardImageLimitReached;
       case FeatureType.liveTextMessage:
-        if (resolvedSessionId == null || resolvedThreadType == null) return false;
+        if (resolvedSessionId == null || resolvedThreadType == null) {
+          return false;
+        }
         final status = threadLimitStatus(
           sessionId: resolvedSessionId,
           sessionType: resolvedThreadType,
         );
         return !status.liveHardBlocked && !status.liveTextLimitReached;
       case FeatureType.liveAudioTurn:
-        if (resolvedSessionId == null || resolvedThreadType == null) return false;
+        if (resolvedSessionId == null || resolvedThreadType == null) {
+          return false;
+        }
         final status = threadLimitStatus(
           sessionId: resolvedSessionId,
           sessionType: resolvedThreadType,
         );
         return !status.liveHardBlocked && !status.liveAudioLimitReached;
       case FeatureType.liveImageUpload:
-        if (resolvedSessionId == null || resolvedThreadType == null) return false;
+        if (resolvedSessionId == null || resolvedThreadType == null) {
+          return false;
+        }
         final status = threadLimitStatus(
           sessionId: resolvedSessionId,
           sessionType: resolvedThreadType,
@@ -667,8 +680,7 @@ class SubscriptionService extends ChangeNotifier {
       _buildLiveProduct(
         type: SubscriptionProductType.proDriver,
         title: 'Pro Driver',
-        subtitle:
-            'Our recommended monthly plan for the full FixEase toolkit.',
+        subtitle: 'Our recommended monthly plan for the full FixEase toolkit.',
         badge: 'BEST VALUE',
         recommended: true,
         fallbackPrice: AppConfig.proDemoPrice,
@@ -719,7 +731,8 @@ class SubscriptionService extends ChangeNotifier {
       title: title,
       subtitle: subtitle,
       priceString: storeProduct?.priceString ?? fallbackPrice,
-      billingLabel: storeProduct != null ? _billingLabel(type) : fallbackBilling,
+      billingLabel:
+          storeProduct != null ? _billingLabel(type) : fallbackBilling,
       badge: badge,
       recommended: recommended,
       livePackage: package,
@@ -753,7 +766,9 @@ class SubscriptionService extends ChangeNotifier {
         : AppConfig.revenueCatAndroidApiKey;
     if (apiKey.trim().isEmpty) return;
 
-    await Purchases.setLogLevel(LogLevel.debug);
+    await Purchases.setLogLevel(
+      kDebugMode ? LogLevel.debug : LogLevel.warn,
+    );
     await Purchases.configure(PurchasesConfiguration(apiKey));
     Purchases.addCustomerInfoUpdateListener(_applyCustomerInfo);
     _configuredPurchases = true;
@@ -774,6 +789,7 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   void _applyCustomerInfo(CustomerInfo info) {
+    _lastSyncErrorMessage = null;
     _customerInfo = info;
 
     final active = info.entitlements.active;
@@ -798,6 +814,73 @@ class SubscriptionService extends ChangeNotifier {
     _tier = SubscriptionTier.free;
     _emergencyExpiresAt = expiry;
     _persist();
+  }
+
+  Future<void> _refreshStoreState({
+    required bool includeOfferings,
+    required String source,
+  }) async {
+    _lastSyncErrorMessage = null;
+    await _configurePurchasesIfNeeded();
+    if (!_configuredPurchases) {
+      _applyStrictEntitlementFallback(clearCustomerInfo: true);
+      _lastSyncErrorMessage =
+          'Subscription status could not be verified because RevenueCat is not configured.';
+      notifyListeners();
+      return;
+    }
+
+    if (includeOfferings) {
+      try {
+        _offerings = await Purchases.getOfferings();
+      } catch (error, stackTrace) {
+        _offerings = null;
+        _recordSyncFailure(
+          source: '$source:getOfferings',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+
+    try {
+      final info = await Purchases.getCustomerInfo();
+      _applyCustomerInfo(info);
+    } catch (error, stackTrace) {
+      _applyStrictEntitlementFallback(clearCustomerInfo: true);
+      _recordSyncFailure(
+        source: '$source:getCustomerInfo',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    notifyListeners();
+  }
+
+  void _applyStrictEntitlementFallback({bool clearCustomerInfo = false}) {
+    _tier = SubscriptionTier.free;
+    _emergencyExpiresAt = null;
+    if (clearCustomerInfo) {
+      _customerInfo = null;
+    }
+  }
+
+  void _recordSyncFailure({
+    required String source,
+    required Object error,
+    required StackTrace stackTrace,
+  }) {
+    final message =
+        'Subscription verification failed during $source: ${error.toString()}';
+    _lastSyncErrorMessage =
+        'Subscription status could not be verified. Premium access is '
+        'temporarily locked until the store connection is restored.';
+    debugPrint(message);
+    debugPrintStack(
+      stackTrace: stackTrace,
+      label: 'SubscriptionService sync failure',
+    );
   }
 
   DateTime? _resolveEmergencyExpiry(EntitlementInfo? entitlement) {
@@ -837,14 +920,6 @@ class SubscriptionService extends ChangeNotifier {
       row['demo_state'] as String? ?? DemoSubscriptionState.mockFree.name,
     );
 
-    final tierRaw = row['tier'] as String?;
-    if (tierRaw != null) {
-      _tier = SubscriptionTier.values.byName(tierRaw);
-    }
-
-    final expiryRaw = row['emergency_expires_at'] as String?;
-    _emergencyExpiresAt =
-        expiryRaw != null ? DateTime.tryParse(expiryRaw) : null;
     final trustedRaw = row['last_trusted_utc'] as String?;
     _lastTrustedUtc = trustedRaw != null ? DateTime.tryParse(trustedRaw) : null;
     final threadUsageRows = row['thread_usage'] as Map?;
@@ -860,8 +935,9 @@ class SubscriptionService extends ChangeNotifier {
             }) ??
             const Iterable<MapEntry<String, ThreadUsage>>.empty(),
       );
-    _resetMonthIfNeeded(_lastTrustedUtc ?? DateTime.now().toUtc());
-    _expireEmergencyIfNeeded();
+    if (_lastTrustedUtc != null) {
+      _resetMonthIfNeeded(_lastTrustedUtc!);
+    }
   }
 
   void _resetMonthIfNeeded(DateTime referenceUtc) {
@@ -891,11 +967,9 @@ class SubscriptionService extends ChangeNotifier {
     return LocalStoreService.writeJsonMap(
       _storageKey,
       {
-        'tier': _tier.name,
         'demo_state': _demoState.name,
         'diagnostics_used': _diagnosticsThisMonth,
         'month_start': _monthStart.toIso8601String(),
-        'emergency_expires_at': _emergencyExpiresAt?.toIso8601String(),
         'last_trusted_utc': _lastTrustedUtc?.toIso8601String(),
         'thread_usage': _threadUsage.map(
           (key, value) => MapEntry(key, value.toJson()),
@@ -937,13 +1011,15 @@ class SubscriptionService extends ChangeNotifier {
       final thread = ConversationService.instance.threadForSession(session.id);
       final rebuilt = _deriveUsage(session, thread);
       final existing = _threadUsage[session.id];
-      if (existing == null || existing.toJson().toString() != rebuilt.toJson().toString()) {
+      if (existing == null ||
+          existing.toJson().toString() != rebuilt.toJson().toString()) {
         _threadUsage[session.id] = rebuilt;
         changed = true;
       }
     }
-    final liveSessionIds =
-        DiagnosticService.instance.sessions.map((session) => session.id).toSet();
+    final liveSessionIds = DiagnosticService.instance.sessions
+        .map((session) => session.id)
+        .toSet();
     final orphanedKeys = _threadUsage.keys
         .where((key) => !liveSessionIds.contains(key))
         .toList();

@@ -12,7 +12,7 @@ import '../services/report_export_service.dart';
 import '../services/subscription_service.dart';
 import '../theme/app_theme.dart';
 
-class ReportExportButton extends StatelessWidget {
+class ReportExportButton extends StatefulWidget {
   const ReportExportButton({
     super.key,
     required this.session,
@@ -23,24 +23,34 @@ class ReportExportButton extends StatelessWidget {
   final AiDiagnosticResponse response;
 
   @override
+  State<ReportExportButton> createState() => _ReportExportButtonState();
+}
+
+class _ReportExportButtonState extends State<ReportExportButton> {
+  bool _isExporting = false;
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () async {
-        final reportCount = DiagnosticService.instance.reportCountForCurrentMonth();
-        final needsUpgrade =
-            reportCount > AppConfig.freePdfReportsPerMonth &&
-            !checkAccess(FeatureType.techPdfAfterTwoReports);
-        if (needsUpgrade) {
-          final unlocked = await ensureAccess(
-            context,
-            FeatureType.techPdfAfterTwoReports,
-            reason: 'Download Tech PDF',
-          );
-          if (!unlocked) return;
-        }
-        if (!context.mounted) return;
-        await _showActions(context);
-      },
+      onTap: _isExporting
+          ? null
+          : () async {
+              final reportCount =
+                  DiagnosticService.instance.reportCountForCurrentMonth();
+              final needsUpgrade =
+                  reportCount > AppConfig.freePdfReportsPerMonth &&
+                      !checkAccess(FeatureType.techPdfAfterTwoReports);
+              if (needsUpgrade) {
+                final unlocked = await ensureAccess(
+                  context,
+                  FeatureType.techPdfAfterTwoReports,
+                  reason: 'Download Tech PDF',
+                );
+                if (!unlocked) return;
+              }
+              if (!context.mounted) return;
+              await _showActions(context);
+            },
       child: Container(
         width: 38,
         height: 38,
@@ -52,10 +62,21 @@ class ReportExportButton extends StatelessWidget {
             width: 0.7,
           ),
         ),
-        child: const Icon(
-          Icons.ios_share_rounded,
-          size: 18,
-          color: AppColors.accent,
+        child: Center(
+          child: _isExporting
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    color: AppColors.accent,
+                  ),
+                )
+              : const Icon(
+                  Icons.ios_share_rounded,
+                  size: 18,
+                  color: AppColors.accent,
+                ),
         ),
       ),
     );
@@ -93,8 +114,8 @@ class ReportExportButton extends StatelessWidget {
                     await _run(
                       context,
                       action: () => ReportExportService.sharePdf(
-                        session: session,
-                        response: response,
+                        session: widget.session,
+                        response: widget.response,
                       ),
                     );
                   },
@@ -108,8 +129,8 @@ class ReportExportButton extends StatelessWidget {
                     await _run(
                       context,
                       action: () => ReportExportService.savePdf(
-                        session: session,
-                        response: response,
+                        session: widget.session,
+                        response: widget.response,
                       ),
                     );
                   },
@@ -126,6 +147,10 @@ class ReportExportButton extends StatelessWidget {
     BuildContext context, {
     required Future<dynamic> Function() action,
   }) async {
+    if (_isExporting) return;
+    if (mounted) {
+      setState(() => _isExporting = true);
+    }
     try {
       final result = await action();
       if (!context.mounted) return;
@@ -159,6 +184,10 @@ class ReportExportButton extends StatelessWidget {
           closeIconColor: AppColors.textPrimary,
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
     }
   }
 }

@@ -5,8 +5,8 @@ import '../../models/diagnostic.dart';
 import '../conversations/conversation_chat_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
+import '../../services/quota_service.dart';
 import '../../services/review_prompt_service.dart';
-import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/ai_loading_view.dart';
@@ -99,7 +99,7 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
 
       await DiagnosticService.instance.save(session);
       if (!response.isFallback) {
-        await SubscriptionService.instance.recordDiagnosis();
+        await QuotaService.instance.refreshStatus();
       }
 
       if (!mounted) return;
@@ -123,7 +123,8 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Analysis failed: ${e.toString().split(":").last.trim()}'),
+          content:
+              Text('Analysis failed: ${e.toString().split(":").last.trim()}'),
           backgroundColor: AppColors.surface,
           behavior: SnackBarBehavior.floating,
         ),
@@ -161,67 +162,67 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-              // ── top bar ──
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
-                child: Row(
-                  children: [
-                    if (!_submitting && _result == null)
-                      FixEaseStepBackButton(onPressed: _back),
-                    if (_result != null)
-                      FixEaseStepBackButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                    const Spacer(),
-                    if (!_submitting && _result == null)
-                      Text('Step ${_step + 1} of 3', style: tt.bodySmall),
-                  ],
-                ),
-              ),
-
-              if (!_submitting && _result == null)
+                // ── top bar ──
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: (_step + 1) / 3,
-                      minHeight: 4,
-                      backgroundColor: AppColors.surfaceHighlight,
-                      color: AppColors.accent,
+                  padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
+                  child: Row(
+                    children: [
+                      if (!_submitting && _result == null)
+                        FixEaseStepBackButton(onPressed: _back),
+                      if (_result != null)
+                        FixEaseStepBackButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      const Spacer(),
+                      if (!_submitting && _result == null)
+                        Text('Step ${_step + 1} of 3', style: tt.bodySmall),
+                    ],
+                  ),
+                ),
+
+                if (!_submitting && _result == null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: (_step + 1) / 3,
+                        minHeight: 4,
+                        backgroundColor: AppColors.surfaceHighlight,
+                        color: AppColors.accent,
+                      ),
                     ),
                   ),
-                ),
 
-              Expanded(
-                child: _submitting
-                    ? _buildSubmitting(tt)
-                    : _result != null
-                        ? _buildResultView(tt)
-                        : SingleChildScrollView(
-                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 250),
-                              child: switch (_step) {
-                                0 => _buildSymptomStep(tt),
-                                1 => _buildSeverityStep(tt),
-                                _ => _buildChecklistStep(tt),
-                              },
+                Expanded(
+                  child: _submitting
+                      ? _buildSubmitting(tt)
+                      : _result != null
+                          ? _buildResultView(tt)
+                          : SingleChildScrollView(
+                              padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                              child: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 250),
+                                child: switch (_step) {
+                                  0 => _buildSymptomStep(tt),
+                                  1 => _buildSeverityStep(tt),
+                                  _ => _buildChecklistStep(tt),
+                                },
+                              ),
                             ),
-                          ),
-              ),
-
-              if (!_submitting && _result == null)
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  child: NeuPrimaryButton(
-                    label: _step == 2 ? 'Submit Diagnosis' : 'Continue',
-                    icon: _step == 2 ? Icons.send_rounded : null,
-                    onPressed: _canProceed ? _next : null,
-                  ),
                 ),
+
+                if (!_submitting && _result == null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 16),
+                    child: NeuPrimaryButton(
+                      label: _step == 2 ? 'Submit Diagnosis' : 'Continue',
+                      icon: _step == 2 ? Icons.send_rounded : null,
+                      onPressed: _canProceed ? _next : null,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -248,14 +249,12 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
         const SizedBox(height: 6),
         Text('Select all symptoms you\'re experiencing', style: tt.bodyMedium),
         const SizedBox(height: 8),
-
         NeuTextField(
           hint: 'Describe anything else…',
           icon: Icons.edit_note_rounded,
           controller: _descCtrl,
         ),
         const SizedBox(height: 18),
-
         for (final cat in kSymptomCategories) ...[
           Padding(
             padding: const EdgeInsets.only(top: 8, bottom: 8),
@@ -273,7 +272,9 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
                 onTap: () {
                   HapticFeedback.selectionClick();
                   setState(() {
-                    sel ? _selectedSymptoms.remove(s) : _selectedSymptoms.add(s);
+                    sel
+                        ? _selectedSymptoms.remove(s)
+                        : _selectedSymptoms.add(s);
                   });
                 },
                 child: AnimatedContainer(
@@ -359,8 +360,7 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
               setState(() => _checklist[entry.key] = !entry.value);
             },
             child: NeuPane(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               child: Row(
                 children: [
                   AnimatedContainer(
@@ -385,11 +385,12 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(entry.key, style: tt.bodyMedium?.copyWith(
-                      color: entry.value
-                          ? AppColors.textPrimary
-                          : AppColors.textSecondary,
-                    )),
+                    child: Text(entry.key,
+                        style: tt.bodyMedium?.copyWith(
+                          color: entry.value
+                              ? AppColors.textPrimary
+                              : AppColors.textSecondary,
+                        )),
                   ),
                 ],
               ),
@@ -568,7 +569,9 @@ class _SeverityTile extends StatelessWidget {
               height: 44,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: selected ? c.withValues(alpha: 0.2) : AppColors.surfaceHighlight,
+                color: selected
+                    ? c.withValues(alpha: 0.2)
+                    : AppColors.surfaceHighlight,
               ),
               child: Icon(_icons[severity], color: c, size: 22),
             ),
@@ -588,12 +591,10 @@ class _SeverityTile extends StatelessWidget {
                 ],
               ),
             ),
-            if (selected)
-              Icon(Icons.check_circle_rounded, color: c, size: 22),
+            if (selected) Icon(Icons.check_circle_rounded, color: c, size: 22),
           ],
         ),
       ),
     );
   }
 }
-

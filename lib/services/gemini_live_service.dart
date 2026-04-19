@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -13,7 +15,9 @@ import '../models/conversation.dart';
 import '../models/diagnostic.dart';
 import '../models/vehicle.dart';
 import 'conversation_service.dart';
+import 'device_identity_service.dart';
 import 'diagnostic_service.dart';
+import 'quota_service.dart';
 import 'subscription_service.dart';
 
 enum LiveSessionState { idle, connecting, streaming, analyzing, done, error }
@@ -26,6 +30,7 @@ class LiveMessage {
     this.source = ConversationMessageSource.text,
     this.attachmentPath,
     this.attachmentName,
+    this.includeInHistory = true,
   });
 
   final String text;
@@ -34,6 +39,7 @@ class LiveMessage {
   final ConversationMessageSource source;
   final String? attachmentPath;
   final String? attachmentName;
+  final bool includeInHistory;
 
   bool get hasAttachment =>
       attachmentPath != null ||
@@ -49,6 +55,42 @@ class LiveMessage {
       ConversationMessageSource.text => 'Message',
     };
   }
+
+  LiveMessage copyWith({
+    String? text,
+    bool? isUser,
+    DateTime? timestamp,
+    ConversationMessageSource? source,
+    String? attachmentPath,
+    String? attachmentName,
+    bool? includeInHistory,
+  }) {
+    return LiveMessage(
+      text: text ?? this.text,
+      isUser: isUser ?? this.isUser,
+      timestamp: timestamp ?? this.timestamp,
+      source: source ?? this.source,
+      attachmentPath: attachmentPath ?? this.attachmentPath,
+      attachmentName: attachmentName ?? this.attachmentName,
+      includeInHistory: includeInHistory ?? this.includeInHistory,
+    );
+  }
+}
+
+class _PendingLiveTurn {
+  const _PendingLiveTurn({
+    required this.messageIndex,
+    required this.text,
+    required this.source,
+    this.attachmentPath,
+    this.attachmentName,
+  });
+
+  final int messageIndex;
+  final String text;
+  final ConversationMessageSource source;
+  final String? attachmentPath;
+  final String? attachmentName;
 }
 
 class GeminiLiveService extends ChangeNotifier {
@@ -129,7 +171,7 @@ class GeminiLiveService extends ChangeNotifier {
     try {
       final result = await http
           .get(AiConfig.endpoint('/health'))
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 10));
       return result.statusCode == 200;
     } catch (_) {
       return false;
@@ -163,7 +205,8 @@ class GeminiLiveService extends ChangeNotifier {
     notifyListeners();
 
     await _sendToBackend(
-      text: 'Greet the user briefly and ask what car issue they are experiencing.',
+      text:
+          'Greet the user briefly and ask what car issue they are experiencing.',
     );
   }
 
@@ -178,7 +221,11 @@ class GeminiLiveService extends ChangeNotifier {
   }
 
   Future<void> _startRecording() async {
-    if (!await _recorder.hasPermission()) return;
+    if (!await _recorder.hasPermission()) {
+      throw const LiveSessionPermissionException(
+        'Microphone access is required for live voice diagnosis.',
+      );
+    }
 
     if (_isSpeaking) {
       await _tts.stop();
@@ -194,18 +241,25 @@ class GeminiLiveService extends ChangeNotifier {
     _recordingElapsed = Duration.zero;
     _isStoppingRecording = false;
 
-    await _recorder.start(
-      const RecordConfig(
-        encoder: AudioEncoder.aacLc,
-        bitRate: 64000,
-        sampleRate: 16000,
-        numChannels: 1,
-        echoCancel: true,
-        noiseSuppress: true,
-        autoGain: true,
-      ),
-      path: path,
-    );
+    try {
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 16000,
+          numChannels: 1,
+          echoCancel: true,
+          noiseSuppress: true,
+          autoGain: true,
+        ),
+        path: path,
+      );
+    } catch (error) {
+      throw LiveSessionException(
+        'Could not start live voice recording.',
+        cause: error,
+      );
+    }
 
     _isRecording = true;
     _startRecordingTicker();
@@ -240,7 +294,7 @@ class GeminiLiveService extends ChangeNotifier {
       return;
     }
 
-    final bytes = await file.readAsBytes();
+    final bytes = await Isolate.run(() => File(path).readAsBytesSync());
     if (bytes.length < 1000) {
       try {
         await file.delete();
@@ -263,26 +317,27 @@ class GeminiLiveService extends ChangeNotifier {
       return;
     }
 
-    if (!SubscriptionService.instance.hasPremiumAccess) {
-      await SubscriptionService.instance.recordThreadEvent(
-        sessionId: _threadId!,
-        sessionType: DiagnosticType.live,
-        event: ThreadUsageEvent.liveAudio,
-      );
-    }
-
-    _addUserMessage('Voice message', source: ConversationMessageSource.audio);
-    await _persistUserTurn(
+    final pendingTurn = _PendingLiveTurn(
+      messageIndex: _addUserMessage(
+        'Voice message',
+        source: ConversationMessageSource.audio,
+        includeInHistory: false,
+      ),
       text: 'Voice note',
       source: ConversationMessageSource.audio,
     );
     _state = LiveSessionState.analyzing;
     notifyListeners();
 
+    final encodedAudio = await Isolate.run(() => base64Encode(bytes));
     await _sendToBackend(
-      audioData: base64Encode(bytes),
+      audioData: encodedAudio,
       audioMimeType: 'audio/mp4',
+      usageEvent: !SubscriptionService.instance.hasPremiumAccess
+          ? ThreadUsageEvent.liveAudio
+          : null,
       countsAsDiagnosisStart: true,
+      pendingUserTurn: pendingTurn,
     );
 
     try {
@@ -305,24 +360,21 @@ class GeminiLiveService extends ChangeNotifier {
       return;
     }
 
-    await SubscriptionService.instance.recordThreadEvent(
-      sessionId: _threadId!,
-      sessionType: DiagnosticType.live,
-      event: ThreadUsageEvent.liveImage,
-    );
-
     final dir = await getTemporaryDirectory();
     final previewPath =
         '${dir.path}/fixease_live_photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    await File(previewPath).writeAsBytes(jpegBytes, flush: true);
-
-    _addUserMessage(
-      'Photo sent',
-      source: ConversationMessageSource.image,
-      attachmentPath: previewPath,
-      attachmentName: 'Live photo',
+    await Isolate.run(
+      () => File(previewPath).writeAsBytesSync(jpegBytes, flush: true),
     );
-    await _persistUserTurn(
+
+    final pendingTurn = _PendingLiveTurn(
+      messageIndex: _addUserMessage(
+        'Photo sent',
+        source: ConversationMessageSource.image,
+        attachmentPath: previewPath,
+        attachmentName: 'Live photo',
+        includeInHistory: false,
+      ),
       text: 'Photo attached',
       source: ConversationMessageSource.image,
       attachmentPath: previewPath,
@@ -331,12 +383,39 @@ class GeminiLiveService extends ChangeNotifier {
     _state = LiveSessionState.analyzing;
     notifyListeners();
 
+    final uploadBytes = await _compressLiveImage(jpegBytes);
+    final encodedImage = await Isolate.run(() => base64Encode(uploadBytes));
     await _sendToBackend(
-      text: 'The user sent a photo of their car issue. Analyze it and describe what you see.',
-      imageData: base64Encode(jpegBytes),
+      text:
+          'The user sent a photo of their car issue. Analyze it and describe what you see.',
+      imageData: encodedImage,
       imageMimeType: 'image/jpeg',
+      usageEvent: ThreadUsageEvent.liveImage,
       countsAsDiagnosisStart: true,
+      pendingUserTurn: pendingTurn,
     );
+  }
+
+  Future<Uint8List> _compressLiveImage(Uint8List jpegBytes) async {
+    if (jpegBytes.length <= 350 * 1024) {
+      return jpegBytes;
+    }
+
+    try {
+      final compressed = await FlutterImageCompress.compressWithList(
+        jpegBytes,
+        format: CompressFormat.jpeg,
+        minWidth: 1600,
+        minHeight: 1600,
+        quality: 72,
+      );
+      if (compressed.isEmpty || compressed.length >= jpegBytes.length) {
+        return jpegBytes;
+      }
+      return compressed;
+    } catch (_) {
+      return jpegBytes;
+    }
   }
 
   Future<void> sendText(String text) async {
@@ -350,14 +429,12 @@ class GeminiLiveService extends ChangeNotifier {
       return;
     }
 
-    await SubscriptionService.instance.recordThreadEvent(
-      sessionId: _threadId!,
-      sessionType: DiagnosticType.live,
-      event: ThreadUsageEvent.liveText,
-    );
-
-    _addUserMessage(text, source: ConversationMessageSource.text);
-    await _persistUserTurn(
+    final pendingTurn = _PendingLiveTurn(
+      messageIndex: _addUserMessage(
+        text,
+        source: ConversationMessageSource.text,
+        includeInHistory: false,
+      ),
       text: text,
       source: ConversationMessageSource.text,
     );
@@ -366,7 +443,9 @@ class GeminiLiveService extends ChangeNotifier {
 
     await _sendToBackend(
       text: text,
+      usageEvent: ThreadUsageEvent.liveText,
       countsAsDiagnosisStart: true,
+      pendingUserTurn: pendingTurn,
     );
   }
 
@@ -376,7 +455,9 @@ class GeminiLiveService extends ChangeNotifier {
     String? audioMimeType,
     String? imageData,
     String? imageMimeType,
+    ThreadUsageEvent? usageEvent,
     bool countsAsDiagnosisStart = false,
+    _PendingLiveTurn? pendingUserTurn,
   }) async {
     final requestGeneration = _sessionGeneration;
     final requestThreadId = _threadId;
@@ -392,6 +473,7 @@ class GeminiLiveService extends ChangeNotifier {
         'history': _messages
             .where(
               (message) =>
+                  message.includeInHistory &&
                   message.text != 'Voice message' &&
                   message.text != 'Photo sent' &&
                   !message.text.startsWith('Session started.'),
@@ -426,24 +508,31 @@ class GeminiLiveService extends ChangeNotifier {
         };
       }
 
-      final response = await http
-          .post(
-            AiConfig.endpoint('/api/live/voice'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 30));
+      final response = await _postLiveResponseWithRetry(
+        body,
+        consumeDiagnosticQuota: countsAsDiagnosisStart,
+      );
 
       if (response.statusCode == 200) {
         if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
+        _errorMessage = null;
+        await _commitPendingUserTurn(pendingUserTurn);
+        if (usageEvent != null && requestThreadId != null) {
+          await SubscriptionService.instance.recordThreadEvent(
+            sessionId: requestThreadId,
+            sessionType: DiagnosticType.live,
+            event: usageEvent,
+          );
+        }
         if (countsAsDiagnosisStart && requestThreadId != null) {
           await SubscriptionService.instance.recordLiveDiagnosisIfNeeded(
             sessionId: requestThreadId,
           );
+          await QuotaService.instance.refreshStatus();
         }
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final responseText =
-            data['text'] as String? ?? 'I could not process that. Please try again.';
+        final data = await _parseJsonMap(response.body);
+        final responseText = data['text'] as String? ??
+            'I could not process that. Please try again.';
 
         _addAssistantMessage(responseText);
         await _persistAssistantTurn(responseText);
@@ -459,21 +548,108 @@ class GeminiLiveService extends ChangeNotifier {
         notifyListeners();
       } else {
         if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final message = 'Error: ${data['message'] ?? 'Request failed'}';
-        _addAssistantMessage(message);
-        await _persistAssistantTurn(message);
+        final data = await _parseJsonMap(response.body);
+        final failureMessage =
+            data['message'] as String? ?? 'Request failed. Please try again.';
+        _errorMessage = failureMessage;
+        final message = 'Error: $failureMessage';
+        _addAssistantMessage(message, includeInHistory: false);
         _state = LiveSessionState.streaming;
         notifyListeners();
       }
+    } on TimeoutException catch (_) {
+      if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
+      const message =
+          'The live diagnosis server is taking longer than expected. Please try again in a moment.';
+      _errorMessage = message;
+      _addAssistantMessage(message, includeInHistory: false);
+      _state = LiveSessionState.streaming;
+      notifyListeners();
+    } on SocketException catch (_) {
+      if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
+      const message =
+          'Your connection dropped while contacting live diagnosis. Check your network and try again.';
+      _errorMessage = message;
+      _addAssistantMessage(message, includeInHistory: false);
+      _state = LiveSessionState.streaming;
+      notifyListeners();
+    } on LiveSessionException catch (error) {
+      if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
+      final message = error.message;
+      _errorMessage = message;
+      _addAssistantMessage(message, includeInHistory: false);
+      _state = LiveSessionState.streaming;
+      notifyListeners();
     } catch (_) {
       if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
       const message = 'Connection error. Please try again.';
-      _addAssistantMessage(message);
-      await _persistAssistantTurn(message);
+      _errorMessage = message;
+      _addAssistantMessage(message, includeInHistory: false);
       _state = LiveSessionState.streaming;
       notifyListeners();
     }
+  }
+
+  Future<http.Response> _postLiveResponseWithRetry(Map<String, dynamic> body,
+      {bool consumeDiagnosticQuota = false}) async {
+    final deviceId = await DeviceIdentityService.getDeviceId();
+    if (deviceId == null || deviceId.isEmpty) {
+      throw const LiveSessionException(
+        'FixEase could not verify this device for live scan access. Please restart the app and try again.',
+      );
+    }
+    final encodedBody = await Isolate.run(() => jsonEncode(body));
+    var delay = const Duration(seconds: 1);
+
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final response = await http
+            .post(
+              AiConfig.endpoint('/api/live/voice'),
+              headers: {
+                'Content-Type': 'application/json',
+                'x-fixease-plan': SubscriptionService.instance.hasPremiumAccess
+                    ? 'pro'
+                    : 'free',
+                'x-fixease-device-id': deviceId,
+                'x-fixease-live-session-id': _threadId ?? '',
+                'x-fixease-consume-diagnostic':
+                    consumeDiagnosticQuota ? 'true' : 'false',
+              },
+              body: encodedBody,
+            )
+            .timeout(const Duration(seconds: 60));
+        if (response.statusCode >= 500 && attempt < 2) {
+          await Future<void>.delayed(delay);
+          delay = Duration(seconds: delay.inSeconds * 2);
+          continue;
+        }
+        return response;
+      } on TimeoutException {
+        if (attempt == 2) rethrow;
+      } on SocketException {
+        if (attempt == 2) rethrow;
+      } on http.ClientException {
+        if (attempt == 2) rethrow;
+      }
+
+      await Future<void>.delayed(delay);
+      delay = Duration(seconds: delay.inSeconds * 2);
+    }
+
+    throw const LiveSessionException(
+      'Could not reach the live diagnosis server after multiple attempts.',
+    );
+  }
+
+  Future<Map<String, dynamic>> _parseJsonMap(String raw) async {
+    if (raw.trim().isEmpty) {
+      return <String, dynamic>{};
+    }
+    final decoded = await Isolate.run(
+      () => jsonDecode(raw) as Map<String, dynamic>,
+    );
+    return Map<String, dynamic>.from(decoded);
   }
 
   void endSession() {
@@ -517,11 +693,12 @@ class GeminiLiveService extends ChangeNotifier {
         _state != LiveSessionState.idle;
   }
 
-  void _addUserMessage(
+  int _addUserMessage(
     String text, {
     ConversationMessageSource source = ConversationMessageSource.text,
     String? attachmentPath,
     String? attachmentName,
+    bool includeInHistory = true,
   }) {
     _messages.add(
       LiveMessage(
@@ -531,16 +708,19 @@ class GeminiLiveService extends ChangeNotifier {
         source: source,
         attachmentPath: attachmentPath,
         attachmentName: attachmentName,
+        includeInHistory: includeInHistory,
       ),
     );
+    return _messages.length - 1;
   }
 
-  void _addAssistantMessage(String text) {
+  void _addAssistantMessage(String text, {bool includeInHistory = true}) {
     _messages.add(
       LiveMessage(
         text: text,
         isUser: false,
         timestamp: DateTime.now(),
+        includeInHistory: includeInHistory,
       ),
     );
   }
@@ -551,7 +731,26 @@ class GeminiLiveService extends ChangeNotifier {
         text: text,
         isUser: false,
         timestamp: DateTime.now(),
+        includeInHistory: false,
       ),
+    );
+  }
+
+  Future<void> _commitPendingUserTurn(_PendingLiveTurn? pendingTurn) async {
+    if (pendingTurn == null) return;
+    if (pendingTurn.messageIndex < 0 ||
+        pendingTurn.messageIndex >= _messages.length) {
+      return;
+    }
+    final existing = _messages[pendingTurn.messageIndex];
+    if (!existing.isUser) return;
+    _messages[pendingTurn.messageIndex] =
+        existing.copyWith(includeInHistory: true);
+    await _persistUserTurn(
+      text: pendingTurn.text,
+      source: pendingTurn.source,
+      attachmentPath: pendingTurn.attachmentPath,
+      attachmentName: pendingTurn.attachmentName,
     );
   }
 
@@ -682,4 +881,18 @@ class DeviceCapability {
     if (!hasCamera) return 'Camera not available on this device';
     return null;
   }
+}
+
+class LiveSessionException implements Exception {
+  const LiveSessionException(this.message, {this.cause});
+
+  final String message;
+  final Object? cause;
+
+  @override
+  String toString() => message;
+}
+
+class LiveSessionPermissionException extends LiveSessionException {
+  const LiveSessionPermissionException(super.message, {super.cause});
 }

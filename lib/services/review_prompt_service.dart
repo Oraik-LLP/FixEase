@@ -23,7 +23,8 @@ class ReviewPromptService {
     final state = LocalStoreService.readJsonMap(_storageKey);
     final alreadyCompleted = state?['completed'] == true;
     if (alreadyCompleted) return;
-    final lastShown = DateTime.tryParse(state?['last_shown_at'] as String? ?? '');
+    final lastShown =
+        DateTime.tryParse(state?['last_shown_at'] as String? ?? '');
     if (lastShown != null && now.difference(lastShown) < _cooldown) {
       return;
     }
@@ -53,7 +54,8 @@ class ReviewPromptService {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Did FixEase save you money today?', style: tt.titleLarge),
+                    Text('Did FixEase save you money today?',
+                        style: tt.titleLarge),
                     const SizedBox(height: 10),
                     Text(
                       'A quick rating helps us improve the experience for stressed drivers.',
@@ -67,9 +69,11 @@ class ReviewPromptService {
                             icon: Icons.thumb_up_alt_rounded,
                             label: 'Yes',
                             onTap: () async {
-                              await LocalStoreService.writeJsonMap(_storageKey, {
+                              await LocalStoreService.writeJsonMap(
+                                  _storageKey, {
                                 'completed': true,
-                                'completed_at': DateTime.now().toIso8601String(),
+                                'completed_at':
+                                    DateTime.now().toIso8601String(),
                                 'last_trigger': trigger.name,
                               });
                               if (!sheetContext.mounted) return;
@@ -85,7 +89,7 @@ class ReviewPromptService {
                         Expanded(
                           child: _PromptButton(
                             icon: Icons.thumb_down_alt_rounded,
-                            label: 'Need work',
+                            label: 'Needs work',
                             onTap: () async {
                               if (!sheetContext.mounted) return;
                               Navigator.of(sheetContext).pop();

@@ -11,6 +11,7 @@ import '../../models/diagnostic.dart';
 import '../conversations/conversation_chat_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
+import '../../services/file_validation_service.dart';
 import '../../services/review_prompt_service.dart';
 import '../../services/storage_service.dart';
 import '../../services/subscription_service.dart';
@@ -66,41 +67,83 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
   }
 
   Future<void> _pickCamera() async {
-    final xfile = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 90,
-      maxWidth: 2200,
-    );
-    if (xfile != null) {
-      setState(() => _document = File(xfile.path));
+    try {
+      final xfile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 90,
+        maxWidth: 2200,
+      );
+      if (xfile != null) {
+        await _setDocument(File(xfile.path));
+      }
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Camera access is required to capture a bill or estimate. Please '
+        'enable camera permission in system settings and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not capture the selected document: $error');
     }
   }
 
   Future<void> _pickGallery() async {
-    final xfile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 90,
-      maxWidth: 2200,
-    );
-    if (xfile != null) {
-      setState(() => _document = File(xfile.path));
+    try {
+      final xfile = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 90,
+        maxWidth: 2200,
+      );
+      if (xfile != null) {
+        await _setDocument(File(xfile.path));
+      }
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Photo library access is required to choose an image bill. Please '
+        'enable media permission in system settings and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not open your photo library: $error');
     }
   }
 
   Future<void> _pickFile() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
-    );
-    final path = result?.files.single.path;
-    if (path != null && path.isNotEmpty) {
-      setState(() => _document = File(path));
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
+      );
+      final path = result?.files.single.path;
+      if (path != null && path.isNotEmpty) {
+        await _setDocument(File(path));
+        return;
+      }
+      _showMessage('Could not read the selected file on this device.');
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Storage access is required to choose a bill file. Please grant file '
+        'access permission and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not open the selected document: $error');
+    }
+  }
+
+  Future<void> _setDocument(File file) async {
+    final validation =
+        await FileValidationService.validateInvoiceDocument(file);
+    if (!validation.isValid) {
+      _showMessage(validation.message!);
       return;
     }
     if (!mounted) return;
+    setState(() => _document = file);
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Could not read the selected file on this device.'),
+      SnackBar(
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -125,11 +168,19 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
     HapticFeedback.heavyImpact();
 
     try {
-      final storedPath = await StorageService.uploadImage(document, folder: vehicle.id);
+      final validation =
+          await FileValidationService.validateInvoiceDocument(document);
+      if (!validation.isValid) {
+        throw Exception(validation.message);
+      }
+
+      final storedPath =
+          await StorageService.uploadImage(document, folder: vehicle.id);
       final response = await AiService.instance.analyzeInvoiceAudit(
         vehicle: vehicle,
         document: document,
-        purpose: _purposeCtrl.text.trim().isEmpty ? null : _purposeCtrl.text.trim(),
+        purpose:
+            _purposeCtrl.text.trim().isEmpty ? null : _purposeCtrl.text.trim(),
       );
 
       final session = DiagnosticSession(
@@ -212,51 +263,53 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
-                child: Row(
-                  children: [
-                    if (_step < 2)
-                      FixEaseStepBackButton(onPressed: _back),
-                    if (_step == 3)
-                      FixEaseStepBackButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                    const Spacer(),
-                    if (_step < 2) Text('Step ${_step + 1} of 2', style: tt.bodySmall),
-                  ],
-                ),
-              ),
-              if (_step < 2)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: (_step + 1) / 2,
-                      minHeight: 4,
-                      backgroundColor: AppColors.surfaceHighlight,
-                      color: AppColors.accent,
+                  padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
+                  child: Row(
+                    children: [
+                      if (_step < 2) FixEaseStepBackButton(onPressed: _back),
+                      if (_step == 3)
+                        FixEaseStepBackButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      const Spacer(),
+                      if (_step < 2)
+                        Text('Step ${_step + 1} of 2', style: tt.bodySmall),
+                    ],
+                  ),
+                ),
+                if (_step < 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: (_step + 1) / 2,
+                        minHeight: 4,
+                        backgroundColor: AppColors.surfaceHighlight,
+                        color: AppColors.accent,
+                      ),
                     ),
                   ),
+                Expanded(
+                  child: switch (_step) {
+                    0 => _buildPickStep(tt),
+                    1 => _buildReviewStep(tt),
+                    2 => _buildAnalyzing(tt),
+                    _ => _buildResult(tt),
+                  },
                 ),
-              Expanded(
-                child: switch (_step) {
-                  0 => _buildPickStep(tt),
-                  1 => _buildReviewStep(tt),
-                  2 => _buildAnalyzing(tt),
-                  _ => _buildResult(tt),
-                },
-              ),
-              if (_step < 2)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  child: NeuPrimaryButton(
-                    label: _step == 1 ? 'Audit Bill' : 'Continue',
-                    icon: _step == 1 ? Icons.receipt_long_rounded : null,
-                    onPressed: _canProceed ? _next : null,
+                if (_step < 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 16),
+                    child: NeuPrimaryButton(
+                      label: _step == 1 ? 'Audit Bill' : 'Continue',
+                      icon: _step == 1 ? Icons.receipt_long_rounded : null,
+                      onPressed: _canProceed ? _next : null,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -367,7 +420,8 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
             _DocumentPreview(file: _document!, isPdf: _isPdf, large: true),
             const SizedBox(height: 20),
           ],
-          Text('What was the vehicle in for? (optional)', style: tt.titleMedium),
+          Text('What was the vehicle in for? (optional)',
+              style: tt.titleMedium),
           const SizedBox(height: 8),
           NeuTextField(
             hint: 'e.g. "Brake pads and rotor quote" or "AC not cooling"',

@@ -10,6 +10,8 @@ import '../conversations/conversation_chat_screen.dart';
 import 'invoice_audit_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
+import '../../services/file_validation_service.dart';
+import '../../services/quota_service.dart';
 import '../../services/review_prompt_service.dart';
 import '../../services/storage_service.dart';
 import '../../services/subscription_service.dart';
@@ -60,34 +62,60 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   }
 
   Future<void> _pickCamera() async {
-    final xfile = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 85,
-      maxWidth: 1920,
-    );
-    if (xfile != null) {
-      _addImages([File(xfile.path)]);
+    try {
+      final xfile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1920,
+      );
+      if (xfile != null) {
+        await _addImages([File(xfile.path)]);
+      }
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Camera access is required to capture diagnosis photos. Please enable '
+        'camera permission in system settings and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not capture the selected photo: $error');
     }
   }
 
   Future<void> _pickGallery() async {
-    final xfiles = await _picker.pickMultiImage(
-      imageQuality: 85,
-      maxWidth: 1920,
-    );
-    if (xfiles.isNotEmpty) {
-      _addImages(xfiles.map((x) => File(x.path)).toList());
+    try {
+      final xfiles = await _picker.pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 1920,
+      );
+      if (xfiles.isNotEmpty) {
+        await _addImages(xfiles.map((x) => File(x.path)).toList());
+      }
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Photo library access is required to choose diagnosis photos. Please '
+        'enable media permission in system settings and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not open your photo library: $error');
     }
   }
 
-  void _addImages(List<File> files) {
+  Future<void> _addImages(List<File> files) async {
     final remainingSlots = 8 - _images.length;
     if (remainingSlots <= 0) {
       _showImageCapMessage();
       return;
     }
 
-    final accepted = files.take(remainingSlots).toList();
+    final accepted = <File>[];
+    for (final file in files.take(remainingSlots)) {
+      final validation = await FileValidationService.validatePhoto(file);
+      if (!validation.isValid) {
+        _showMessage(validation.message!);
+        continue;
+      }
+      accepted.add(file);
+    }
     if (accepted.isNotEmpty) {
       setState(() {
         _images.addAll(accepted);
@@ -103,6 +131,16 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('You can upload up to 8 photos per report.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -124,6 +162,13 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
     HapticFeedback.heavyImpact();
 
     try {
+      for (final image in _images) {
+        final validation = await FileValidationService.validatePhoto(image);
+        if (!validation.isValid) {
+          throw Exception(validation.message);
+        }
+      }
+
       final urls =
           await StorageService.uploadImages(_images, folder: vehicle.id);
 
@@ -148,7 +193,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
       );
       await DiagnosticService.instance.save(session);
       if (!response.isFallback) {
-        await SubscriptionService.instance.recordDiagnosis();
+        await QuotaService.instance.refreshStatus();
       }
 
       if (!mounted) return;
@@ -169,7 +214,8 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
       setState(() => _step = 1);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Analysis failed: ${e.toString().split(":").last.trim()}'),
+          content:
+              Text('Analysis failed: ${e.toString().split(":").last.trim()}'),
           backgroundColor: AppColors.surface,
           behavior: SnackBarBehavior.floating,
         ),
@@ -203,58 +249,57 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-              // ── top bar ──
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
-                child: Row(
-                  children: [
-                    if (_step < 2)
-                      FixEaseStepBackButton(onPressed: _back),
-                    if (_step == 3)
-                      FixEaseStepBackButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                    const Spacer(),
-                    if (_step < 2)
-                      Text('Step ${_step + 1} of 2', style: tt.bodySmall),
-                  ],
-                ),
-              ),
-
-              if (_step < 2)
+                // ── top bar ──
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: (_step + 1) / 2,
-                      minHeight: 4,
-                      backgroundColor: AppColors.surfaceHighlight,
-                      color: AppColors.accent,
+                  padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
+                  child: Row(
+                    children: [
+                      if (_step < 2) FixEaseStepBackButton(onPressed: _back),
+                      if (_step == 3)
+                        FixEaseStepBackButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      const Spacer(),
+                      if (_step < 2)
+                        Text('Step ${_step + 1} of 2', style: tt.bodySmall),
+                    ],
+                  ),
+                ),
+
+                if (_step < 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: (_step + 1) / 2,
+                        minHeight: 4,
+                        backgroundColor: AppColors.surfaceHighlight,
+                        color: AppColors.accent,
+                      ),
                     ),
                   ),
+
+                Expanded(
+                  child: switch (_step) {
+                    0 => _buildCaptureStep(tt),
+                    1 => _buildPreviewStep(tt),
+                    2 => _buildAnalyzing(tt),
+                    _ => _buildResult(tt),
+                  },
                 ),
 
-              Expanded(
-                child: switch (_step) {
-                  0 => _buildCaptureStep(tt),
-                  1 => _buildPreviewStep(tt),
-                  2 => _buildAnalyzing(tt),
-                  _ => _buildResult(tt),
-                },
-              ),
-
-              if (_step < 2)
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  child: NeuPrimaryButton(
-                    label: _step == 1 ? 'Analyze Photos' : 'Continue',
-                    icon: _step == 1 ? Icons.auto_fix_high_rounded : null,
-                    onPressed: _canProceed ? _next : null,
+                if (_step < 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 16),
+                    child: NeuPrimaryButton(
+                      label: _step == 1 ? 'Analyze Photos' : 'Continue',
+                      icon: _step == 1 ? Icons.auto_fix_high_rounded : null,
+                      onPressed: _canProceed ? _next : null,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -448,7 +493,8 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
                   height: 200,
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => Container(
-                    width: 200, height: 200,
+                    width: 200,
+                    height: 200,
                     color: AppColors.surface,
                     child: const Icon(Icons.broken_image_rounded,
                         color: AppColors.textTertiary),
@@ -543,13 +589,16 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
               itemBuilder: (_, i) => ClipRRect(
                 borderRadius: BorderRadius.circular(10),
                 child: Image.file(_images[i],
-                    width: 72, height: 72, fit: BoxFit.cover,
+                    width: 72,
+                    height: 72,
+                    fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Container(
-                      width: 72, height: 72,
-                      color: AppColors.surface,
-                      child: const Icon(Icons.broken_image_rounded,
-                          size: 20, color: AppColors.textTertiary),
-                    )),
+                          width: 72,
+                          height: 72,
+                          color: AppColors.surface,
+                          child: const Icon(Icons.broken_image_rounded,
+                              size: 20, color: AppColors.textTertiary),
+                        )),
               ),
             ),
           ),
@@ -639,7 +688,9 @@ class _ImageTile extends StatelessWidget {
         Positioned.fill(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(14),
-            child: Image.file(file, fit: BoxFit.cover,
+            child: Image.file(
+              file,
+              fit: BoxFit.cover,
               errorBuilder: (_, __, ___) => Container(
                 color: AppColors.surface,
                 child: const Icon(Icons.broken_image_rounded,
@@ -684,8 +735,7 @@ class _Tip extends StatelessWidget {
               size: 14, color: AppColors.accent),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(text,
-                style: Theme.of(context).textTheme.bodySmall),
+            child: Text(text, style: Theme.of(context).textTheme.bodySmall),
           ),
         ],
       ),

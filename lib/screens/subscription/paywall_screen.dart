@@ -33,7 +33,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
               final service = SubscriptionService.instance;
               final products = service.paywallProducts;
               final emergency = products.firstWhere(
-                (product) => product.type == SubscriptionProductType.emergencyPass,
+                (product) =>
+                    product.type == SubscriptionProductType.emergencyPass,
               );
               final pro = products.firstWhere(
                 (product) => product.type == SubscriptionProductType.proDriver,
@@ -97,7 +98,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
                             selected: _selected == emergency.type,
                             currentTier: service.tier,
                             onTap: () => setState(
-                              () => _selected = SubscriptionProductType.emergencyPass,
+                              () => _selected =
+                                  SubscriptionProductType.emergencyPass,
                             ),
                           ),
                           const SizedBox(height: 14),
@@ -106,7 +108,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
                             selected: _selected == pro.type,
                             currentTier: service.tier,
                             onTap: () => setState(
-                              () => _selected = SubscriptionProductType.proDriver,
+                              () =>
+                                  _selected = SubscriptionProductType.proDriver,
                             ),
                           ),
                           const SizedBox(height: 18),
@@ -178,11 +181,10 @@ class _PaywallScreenState extends State<PaywallScreen> {
     SubscriptionProduct product,
   ) {
     final currentTier = service.tier;
-    final currentMatches =
-        product.type == SubscriptionProductType.proDriver &&
-                currentTier == SubscriptionTier.pro ||
-            product.type == SubscriptionProductType.emergencyPass &&
-                currentTier == SubscriptionTier.emergencyPass;
+    final currentMatches = product.type == SubscriptionProductType.proDriver &&
+            currentTier == SubscriptionTier.pro ||
+        product.type == SubscriptionProductType.emergencyPass &&
+            currentTier == SubscriptionTier.emergencyPass;
     if (currentMatches) return 'This is your current access';
     return product.type == SubscriptionProductType.emergencyPass
         ? 'Unlock Emergency Pass'
@@ -311,7 +313,8 @@ class _DemoModeCard extends StatelessWidget {
                     onChanged(option);
                   },
                   selectedColor: AppColors.accent.withValues(alpha: 0.16),
-                  backgroundColor: AppColors.surfaceHighlight.withValues(alpha: 0.35),
+                  backgroundColor:
+                      AppColors.surfaceHighlight.withValues(alpha: 0.35),
                   labelStyle: tt.bodySmall?.copyWith(
                     color: option == state
                         ? AppColors.accent
@@ -349,11 +352,10 @@ class _PlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final isCurrent =
-        product.type == SubscriptionProductType.proDriver &&
-                currentTier == SubscriptionTier.pro ||
-            product.type == SubscriptionProductType.emergencyPass &&
-                currentTier == SubscriptionTier.emergencyPass;
+    final isCurrent = product.type == SubscriptionProductType.proDriver &&
+            currentTier == SubscriptionTier.pro ||
+        product.type == SubscriptionProductType.emergencyPass &&
+            currentTier == SubscriptionTier.emergencyPass;
 
     final borderColor = product.recommended
         ? AppColors.accent
@@ -405,7 +407,8 @@ class _PlanCard extends StatelessWidget {
                 ),
                 if (product.badge != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(8),
                       color: product.recommended
@@ -441,7 +444,8 @@ class _PlanCard extends StatelessWidget {
                 const Spacer(),
                 if (isCurrent)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(8),
                       color: const Color(0xFF4CAF50).withValues(alpha: 0.16),
@@ -458,23 +462,14 @@ class _PlanCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            Column(
               children: product.features
                   .map(
-                    (feature) => Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(10),
-                        color: AppColors.surfaceHighlight.withValues(alpha: 0.35),
-                      ),
-                      child: Text(
-                        feature,
-                        style: tt.bodySmall?.copyWith(fontSize: 11),
+                    (feature) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _FeaturePill(
+                        text: feature,
+                        highlight: product.recommended || selected,
                       ),
                     ),
                   )
@@ -494,6 +489,62 @@ class _PlanCard extends StatelessWidget {
   }
 }
 
+class _FeaturePill extends StatelessWidget {
+  const _FeaturePill({
+    required this.text,
+    this.highlight = false,
+  });
+
+  final String text;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: highlight
+            ? AppColors.accent.withValues(alpha: 0.12)
+            : AppColors.surfaceHighlight.withValues(alpha: 0.48),
+        border: Border.all(
+          color: highlight
+              ? AppColors.accent.withValues(alpha: 0.24)
+              : const Color(0x14FFFFFF),
+          width: 0.6,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              Icons.check_circle_rounded,
+              size: 16,
+              color: highlight ? AppColors.accent : AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: tt.bodyMedium?.copyWith(
+                fontSize: 12.5,
+                height: 1.3,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ComparisonTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -502,7 +553,7 @@ class _ComparisonTable extends StatelessWidget {
       ('Urgent & photo scans', '3 / month', 'Unlimited'),
       ('Invoice auditing', 'Locked', 'Included'),
       ('Tech PDF exports', 'First 2 monthly reports', 'Included'),
-      ('Older diagnostic history', 'Newest report only', 'Included'),
+      ('Older diagnostic history', 'Newest 2 sessions', 'Included'),
       ('Live audio length', '3 minutes', '10 minutes'),
       ('Priority AI processing', 'Standard', 'Included'),
     ];
@@ -513,29 +564,71 @@ class _ComparisonTable extends StatelessWidget {
         children: [
           Text('Free vs Pro', style: tt.titleMedium),
           const SizedBox(height: 12),
-          Table(
-            columnWidths: const {
-              0: FlexColumnWidth(2.2),
-              1: FlexColumnWidth(1.1),
-              2: FlexColumnWidth(1.1),
-            },
+          Column(
             children: [
-              TableRow(
+              const Row(
                 children: [
-                  const SizedBox.shrink(),
-                  _HeaderCell('Free'),
-                  _HeaderCell('Pro'),
+                  Expanded(flex: 6, child: SizedBox.shrink()),
+                  Expanded(flex: 3, child: _HeaderCell('Free')),
+                  Expanded(flex: 3, child: _HeaderCell('Pro')),
                 ],
               ),
               for (final row in rows)
-                TableRow(
-                  children: [
-                    _LabelCell(row.$1),
-                    _ValueCell(row.$2),
-                    _ValueCell(row.$3, highlight: true),
-                  ],
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _ComparisonRow(
+                    label: row.$1,
+                    freeValue: row.$2,
+                    proValue: row.$3,
+                  ),
                 ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComparisonRow extends StatelessWidget {
+  const _ComparisonRow({
+    required this.label,
+    required this.freeValue,
+    required this.proValue,
+  });
+
+  final String label;
+  final String freeValue;
+  final String proValue;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: AppColors.surfaceHighlight.withValues(alpha: 0.34),
+        border: Border.all(
+          color: const Color(0x14FFFFFF),
+          width: 0.6,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 6,
+            child: _LabelCell(label),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 3,
+            child: _ValueCell(freeValue),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 3,
+            child: _ValueCell(proValue, highlight: true),
           ),
         ],
       ),
@@ -557,7 +650,8 @@ class _HeaderCell extends StatelessWidget {
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: AppColors.accent,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
             ),
       ),
     );
@@ -573,7 +667,14 @@ class _LabelCell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Text(text, style: Theme.of(context).textTheme.bodySmall),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w600,
+              height: 1.25,
+            ),
+      ),
     );
   }
 }
@@ -591,9 +692,10 @@ class _ValueCell extends StatelessWidget {
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: highlight ? AppColors.accent : AppColors.textPrimary,
-              fontWeight: highlight ? FontWeight.w600 : FontWeight.w400,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: highlight ? AppColors.accent : Colors.white,
+              fontWeight: highlight ? FontWeight.w700 : FontWeight.w600,
+              height: 1.2,
             ),
       ),
     );

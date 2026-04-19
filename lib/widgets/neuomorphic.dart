@@ -284,6 +284,9 @@ class NeuTextField extends StatelessWidget {
     this.onSubmitted,
     this.readOnly = false,
     this.enabled = true,
+    this.minLines = 1,
+    this.maxLines = 1,
+    this.textInputAction,
   });
 
   final String? hint;
@@ -297,6 +300,9 @@ class NeuTextField extends StatelessWidget {
   final ValueChanged<String>? onSubmitted;
   final bool readOnly;
   final bool enabled;
+  final int? minLines;
+  final int? maxLines;
+  final TextInputAction? textInputAction;
 
   @override
   Widget build(BuildContext context) {
@@ -311,6 +317,9 @@ class NeuTextField extends StatelessWidget {
         controller: controller,
         obscureText: obscure,
         keyboardType: keyboardType,
+        minLines: minLines,
+        maxLines: maxLines,
+        textInputAction: textInputAction,
         onChanged: onChanged,
         onTap: onTap,
         onSubmitted: onSubmitted,
@@ -536,8 +545,7 @@ class NeuSlider extends StatelessWidget {
               ? null
               : (details) {
                   if (trackW <= 0) return;
-                  final v =
-                      (details.localPosition.dx / trackW).clamp(0.0, 1.0);
+                  final v = (details.localPosition.dx / trackW).clamp(0.0, 1.0);
                   onChanged!(v);
                 },
           child: SizedBox(

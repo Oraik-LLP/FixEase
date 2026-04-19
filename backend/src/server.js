@@ -4,22 +4,91 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
+import {
+  consumeDiagnosticQuota,
+  getDiagnosticQuotaStatus,
+  initializeQuotaStore,
+  resetDiagnosticQuota,
+} from './quota_store.js';
 
 const app = express();
+const port = Number(process.env.PORT || 8787);
+const diagnosisModel =
+  process.env.GEMINI_DIAGNOSIS_MODEL || 'gemini-flash-latest';
+const liveHttpModel = 'gemini-flash-lite-latest'; // Must be REST compatible
+const liveModel =
+  process.env.GEMINI_LIVE_MODEL || 'gemini-3.1-flash-live-preview';
+const maxJsonMb = Number(process.env.MAX_JSON_MB || 30);
+const maxJsonBytes = maxJsonMb * 1024 * 1024;
+const requestQueueTimeoutMs = Number(process.env.REQUEST_QUEUE_TIMEOUT_MS || 12000);
+const largeRequestBytes = Number(process.env.LARGE_REQUEST_BYTES || 8 * 1024 * 1024);
+const upstreamTimeoutMs = Number(process.env.GEMINI_TIMEOUT_MS || 65000);
+const runningInProduction = process.env.NODE_ENV === 'production';
+const aiClient = createAiClient();
+
 app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+app.use((req, res, next) => {
+  const lengthHeader = req.headers['content-length'];
+  const declaredBytes = Number(lengthHeader || 0);
+  req.requestSizeBytes = Number.isFinite(declaredBytes) ? declaredBytes : 0;
+  if (req.requestSizeBytes > maxJsonBytes) {
+    res.status(413).json({
+      message: `Request body is too large. Max supported size is ${maxJsonMb} MB.`,
+      error_code: 'payload_too_large',
+      retryable: false,
+    });
+    return;
+  }
+  next();
+});
+app.use(express.json({ limit: `${maxJsonMb}mb` }));
 
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  req.requestId = Math.random().toString(36).slice(2, 10);
+  req.requestStartedAt = Date.now();
+  const plan = resolveRequestPlan(req);
+  req.requestPlan = plan;
+  res.on('finish', () => {
+    const durationMs = Date.now() - req.requestStartedAt;
+    console.log(
+      `[${new Date().toISOString()}] ${req.requestId} ${req.method} ${req.path} ` +
+        `${res.statusCode} ${durationMs}ms plan=${plan} size=${req.requestSizeBytes}`,
+    );
+  });
   next();
 });
 
-const port = Number(process.env.PORT || 8787);
-const diagnosisModel = process.env.GEMINI_DIAGNOSIS_MODEL || 'gemini-flash-latest';
-const liveHttpModel = 'gemini-flash-lite-latest'; // Must be REST compatible
-const liveModel = process.env.GEMINI_LIVE_MODEL || 'gemini-3.1-flash-live-preview';
+app.use((req, res, next) => {
+  let released = false;
+  const releaseIfNeeded = () => {
+    if (released) return;
+    released = true;
+    try {
+      req.releaseGate?.();
+    } catch (_) {}
+  };
+  res.on('finish', releaseIfNeeded);
+  res.on('close', releaseIfNeeded);
+  next();
+});
 
-function getAi() {
+const diagnosisGate = createRequestGate({
+  name: 'diagnosis',
+  maxConcurrent: Number(process.env.DIAGNOSIS_MAX_CONCURRENT || 4),
+  reservedForPro: Number(process.env.DIAGNOSIS_RESERVED_FOR_PRO || 1),
+  maxQueue: Number(process.env.DIAGNOSIS_MAX_QUEUE || 12),
+  maxLargeConcurrent: Number(process.env.DIAGNOSIS_MAX_LARGE_CONCURRENT || 1),
+});
+
+const liveGate = createRequestGate({
+  name: 'live',
+  maxConcurrent: Number(process.env.LIVE_MAX_CONCURRENT || 6),
+  reservedForPro: Number(process.env.LIVE_RESERVED_FOR_PRO || 2),
+  maxQueue: Number(process.env.LIVE_MAX_QUEUE || 16),
+  maxLargeConcurrent: Number(process.env.LIVE_MAX_LARGE_CONCURRENT || 2),
+});
+
+function createAiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     const error = new Error('Missing GEMINI_API_KEY');
@@ -30,6 +99,115 @@ function getAi() {
   return new GoogleGenAI({ apiKey });
 }
 
+function resolveRequestPlan(req) {
+  const rawPlan = String(req.headers['x-fixease-plan'] || 'free').toLowerCase();
+  return rawPlan === 'pro' || rawPlan === 'emergencypass' || rawPlan === 'emergency_pass'
+    ? 'pro'
+    : 'free';
+}
+
+function isLargeRequest(req) {
+  return (req.requestSizeBytes || 0) >= largeRequestBytes;
+}
+
+function createRequestGate({
+  name,
+  maxConcurrent,
+  reservedForPro,
+  maxQueue,
+  maxLargeConcurrent,
+}) {
+  let active = 0;
+  let activeLarge = 0;
+  const queue = [];
+
+  const canRun = (ticket) => {
+    if (active >= maxConcurrent) return false;
+    if (ticket.isLarge && activeLarge >= maxLargeConcurrent) return false;
+    if (ticket.plan !== 'pro' && active >= Math.max(0, maxConcurrent - reservedForPro)) {
+      return false;
+    }
+    return true;
+  };
+
+  const acquire = (ticket) => {
+    active += 1;
+    if (ticket.isLarge) {
+      activeLarge += 1;
+    }
+  };
+
+  const release = (ticket) => {
+    active = Math.max(0, active - 1);
+    if (ticket.isLarge) {
+      activeLarge = Math.max(0, activeLarge - 1);
+    }
+    drain();
+  };
+
+  const drain = () => {
+    for (let index = 0; index < queue.length; index += 1) {
+      const ticket = queue[index];
+      if (!canRun(ticket)) {
+        continue;
+      }
+      queue.splice(index, 1);
+      clearTimeout(ticket.timeout);
+      acquire(ticket);
+      ticket.resolve(() => release(ticket));
+      index -= 1;
+    }
+  };
+
+  return async function gate(req, _res, next) {
+    const ticket = {
+      plan: req.requestPlan || resolveRequestPlan(req),
+      isLarge: isLargeRequest(req),
+      resolve: null,
+      timeout: null,
+    };
+
+    if (canRun(ticket)) {
+      acquire(ticket);
+      req.releaseGate = () => release(ticket);
+      next();
+      return;
+    }
+
+    if (queue.length >= maxQueue) {
+      next(createBusyError(`${name}_queue_full`));
+      return;
+    }
+
+    try {
+      req.releaseGate = await new Promise((resolve, reject) => {
+        ticket.resolve = resolve;
+        ticket.timeout = setTimeout(() => {
+          const index = queue.indexOf(ticket);
+          if (index >= 0) {
+            queue.splice(index, 1);
+          }
+          reject(createBusyError(`${name}_queue_timeout`));
+        }, requestQueueTimeoutMs);
+        queue.push(ticket);
+      });
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+function createBusyError(errorCode) {
+  const error = new Error(
+    'FixEase is handling a burst of requests right now. Please retry in a moment.',
+  );
+  error.statusCode = 503;
+  error.errorCode = errorCode;
+  error.retryable = true;
+  return error;
+}
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -38,8 +216,46 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.post('/api/diagnose/symptoms', async (req, res) => {
+app.get('/api/quota/diagnostics/status', async (req, res) => {
   try {
+    const quota = await getDiagnosticQuotaStatus({
+      deviceId: resolveDeviceId(req),
+      plan: req.requestPlan,
+      liveSessionId: resolveLiveSessionId(req),
+    });
+    res.json({
+      quota: serializeQuotaStatus(quota),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post('/api/quota/diagnostics/reset', async (req, res) => {
+  try {
+    if (!canResetQuotaForTesting(req)) {
+      res.status(403).json({
+        message: 'Quota reset is disabled outside testing builds.',
+        error_code: 'testing_reset_disabled',
+        retryable: false,
+      });
+      return;
+    }
+
+    const quota = await resetDiagnosticQuota({
+      deviceId: resolveDeviceId(req),
+    });
+    res.json({
+      quota: serializeQuotaStatus(quota),
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post('/api/diagnose/symptoms', diagnosisGate, async (req, res) => {
+  try {
+    await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, symptoms = [], severity = 'medium', description } = req.body ?? {};
     const prompt = buildSymptomPrompt({ vehicle, symptoms, severity, description });
     const text = await generateText({
@@ -48,19 +264,16 @@ app.post('/api/diagnose/symptoms', async (req, res) => {
       responseMimeType: 'application/json',
     });
     const normalized = normalizeDiagnosisResponse(text, 'gemini');
-    normalized.suggested_question = await generateSuggestedQuestion({
-      vehicle,
-      response: normalized,
-      mode: 'symptom',
-    });
+    await consumeDiagnosticQuotaForRequest(req);
     res.json(normalized);
   } catch (error) {
     sendError(res, error);
   }
 });
 
-app.post('/api/diagnose/photos', async (req, res) => {
+app.post('/api/diagnose/photos', diagnosisGate, async (req, res) => {
   try {
+    await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, images = [], description } = req.body ?? {};
     const contents = [
       {
@@ -85,18 +298,14 @@ app.post('/api/diagnose/photos', async (req, res) => {
       responseMimeType: 'application/json',
     });
     const normalized = normalizeDiagnosisResponse(text, 'gemini');
-    normalized.suggested_question = await generateSuggestedQuestion({
-      vehicle,
-      response: normalized,
-      mode: 'photo',
-    });
+    await consumeDiagnosticQuotaForRequest(req);
     res.json(normalized);
   } catch (error) {
     sendError(res, error);
   }
 });
 
-app.post('/api/diagnose/invoice-audit', async (req, res) => {
+app.post('/api/diagnose/invoice-audit', diagnosisGate, async (req, res) => {
   try {
     const { vehicle, documents = [], purpose } = req.body ?? {};
     const contents = [
@@ -122,18 +331,13 @@ app.post('/api/diagnose/invoice-audit', async (req, res) => {
       responseMimeType: 'application/json',
     });
     const normalized = normalizeInvoiceAuditResponse(text, 'gemini');
-    normalized.suggested_question = await generateSuggestedQuestion({
-      vehicle,
-      response: normalized,
-      mode: 'invoice_audit',
-    });
     res.json(normalized);
   } catch (error) {
     sendError(res, error);
   }
 });
 
-app.post('/api/conversations/respond', async (req, res) => {
+app.post('/api/conversations/respond', liveGate, async (req, res) => {
   try {
     const {
       vehicle,
@@ -193,11 +397,13 @@ app.post('/api/conversations/respond', async (req, res) => {
   }
 });
 
-app.post('/api/live/text', async (req, res) => {
+app.post('/api/live/text', liveGate, async (req, res) => {
   try {
+    await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, history = [], message = '' } = req.body ?? {};
     const prompt = buildLiveTextPrompt({ vehicle, history, message });
     const text = await generateText({ model: liveHttpModel, prompt });
+    await consumeDiagnosticQuotaForRequest(req);
     res.json({
       text,
       provider: 'gemini-live',
@@ -209,8 +415,9 @@ app.post('/api/live/text', async (req, res) => {
   }
 });
 
-app.post('/api/live/frame', async (req, res) => {
+app.post('/api/live/frame', liveGate, async (req, res) => {
   try {
+    await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, history = [], message = '', image } = req.body ?? {};
     const parts = [
       {
@@ -229,6 +436,7 @@ app.post('/api/live/frame', async (req, res) => {
       model: liveHttpModel,
       contents: [{ role: 'user', parts }],
     });
+    await consumeDiagnosticQuotaForRequest(req);
     res.json({
       text,
       provider: 'gemini-live',
@@ -243,8 +451,9 @@ app.post('/api/live/frame', async (req, res) => {
 // ── Turn-based voice endpoint ────────────────────────────────────────────────
 // Accepts: audio (base64 WAV), optional image (base64 JPEG), conversation history
 // Returns: text response from Gemini
-app.post('/api/live/voice', async (req, res) => {
+app.post('/api/live/voice', liveGate, async (req, res) => {
   try {
+    await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, history = [], audio, image } = req.body ?? {};
 
     const systemPrompt = `You are FixEase Live, a friendly expert automotive diagnostic assistant having a real-time voice conversation.
@@ -282,6 +491,7 @@ Respond naturally in 2-4 sentences. Be specific and practical. If the user sent 
       model: liveHttpModel,
       contents: [{ role: 'user', parts }],
     });
+    await consumeDiagnosticQuotaForRequest(req);
 
     res.json({
       text,
@@ -309,23 +519,48 @@ async function generateText({ model, prompt, responseMimeType, maxOutputTokens }
 }
 
 async function generateContent({ model, contents, responseMimeType, maxOutputTokens }) {
-  const ai = getAi();
-  const response = await ai.models.generateContentStream({
-    model,
-    contents,
-    config: {
-      ...(responseMimeType ? { responseMimeType } : {}),
-      ...(maxOutputTokens ? { maxOutputTokens } : {}),
-    },
-  });
+  return withTimeout(
+    (async () => {
+      const response = await aiClient.models.generateContentStream({
+        model,
+        contents,
+        config: {
+          ...(responseMimeType ? { responseMimeType } : {}),
+          ...(maxOutputTokens ? { maxOutputTokens } : {}),
+        },
+      });
 
-  let text = '';
-  for await (const chunk of response) {
-    if (chunk.text) {
-      text += chunk.text;
-    }
+      let text = '';
+      for await (const chunk of response) {
+        if (chunk.text) {
+          text += chunk.text;
+        }
+      }
+      return text.trim();
+    })(),
+    upstreamTimeoutMs,
+    `Gemini ${model} request timed out after ${upstreamTimeoutMs}ms`,
+  );
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timeoutHandle;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          const error = new Error(message);
+          error.statusCode = 504;
+          error.errorCode = 'upstream_timeout';
+          error.retryable = true;
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutHandle);
   }
-  return text.trim();
 }
 
 function normalizeDiagnosisResponse(rawText, provider) {
@@ -425,7 +660,8 @@ function buildSymptomPrompt({ vehicle, symptoms, severity, description }) {
   "recommendations": ["action1"],
   "sub_scores": {"Engine": 0, "Brakes": 0, "Transmission": 0, "Electrical": 0, "Suspension": 0},
   "urgency_note": "string or null",
-  "mechanic_script": "Dense mechanic-facing handoff with likely OBD2 codes, pinpoint test steps, expected tolerances, voltages, pressures, free-play, runout, pad thickness, or other exact checks when relevant."
+  "mechanic_script": "Dense mechanic-facing handoff with likely OBD2 codes, pinpoint test steps, expected tolerances, voltages, pressures, free-play, runout, pad thickness, or other exact checks when relevant.",
+  "suggested_question": "string or null"
 }`,
   })}
 
@@ -454,7 +690,8 @@ function buildPhotoPrompt({ vehicle, description }) {
   "recommendations": ["action1"],
   "sub_scores": {"Body": 0, "Tires": 0, "Engine Bay": 0, "Fluids": 0, "Interior": 0},
   "urgency_note": "string or null",
-  "mechanic_script": "Dense mechanic-facing handoff with visual fault hypotheses, inspection targets, tolerance checks, leak-source confirmation steps, and probable measurement points."
+  "mechanic_script": "Dense mechanic-facing handoff with visual fault hypotheses, inspection targets, tolerance checks, leak-source confirmation steps, and probable measurement points.",
+  "suggested_question": "string or null"
 }`,
   })}
 
@@ -546,6 +783,7 @@ Return ONLY a JSON object with this exact structure:
     "Duplicate labor | Labor overlap | Vague fee | Unnecessary flush/service | Diagnostic double-charge | Assembly replacement | Excessive parts markup | Weak justification | Dealer markup"
   ],
   "questions_to_ask": ["4-8 sharp follow-up questions"],
+  "suggested_question": "string or null",
   "negotiation_script": "Short script the customer can use to challenge the bill politely.",
   "limitations": "Briefly mention missing details that reduce confidence.",
   "partial_audit": true
@@ -685,43 +923,61 @@ The user captured a frame and said: "${message}"
 Analyze the image and respond in 2-4 sentences. Name likely issues clearly. If needed, ask for another angle or a closer shot.`;
 }
 
-async function generateSuggestedQuestion({ vehicle, response, mode }) {
-  try {
-    const prompt = buildSuggestedQuestionPrompt({ vehicle, response, mode });
-    const text = await generateText({
-      model: liveHttpModel,
-      prompt,
-      maxOutputTokens: 32,
-    });
-    const cleaned = text.replace(/^["'\s]+|["'\s]+$/g, '').trim();
-    if (!cleaned || cleaned.toUpperCase() === 'NONE') return null;
-    return cleaned.length > 120 ? `${cleaned.slice(0, 117).trim()}...` : cleaned;
-  } catch (_) {
-    return null;
-  }
+function resolveDeviceId(req) {
+  return String(req.headers['x-fixease-device-id'] || '').trim();
 }
 
-function buildSuggestedQuestionPrompt({ vehicle, response, mode }) {
-  return `You are generating exactly one short suggested follow-up question for a car-help app.
+function resolveLiveSessionId(req) {
+  return String(req.headers['x-fixease-live-session-id'] || '').trim();
+}
 
-RULES:
-- Use only the diagnosis result below, not fresh reasoning.
-- Ask at most one short question.
-- The question must materially reduce uncertainty or improve next guidance.
-- Prefer narrow, concrete clarification.
-- If no useful question is needed, return exactly: NONE
-- Output only the question text or NONE.
+function canResetQuotaForTesting(req) {
+  const requested =
+    String(req.headers['x-fixease-testing-reset'] || '').toLowerCase().trim() ===
+    'true';
+  if (!requested) {
+    return false;
+  }
+  return !runningInProduction || process.env.ALLOW_TEST_QUOTA_RESET === 'true';
+}
 
-MODE: ${mode}
-VEHICLE: ${vehicle?.display_name || 'Unknown vehicle'}
-SUMMARY: ${response.summary || 'None'}
-POSSIBLE CAUSES: ${Array.isArray(response.possible_causes) ? response.possible_causes.join('; ') : 'None'}
-RECOMMENDATIONS: ${Array.isArray(response.recommendations) ? response.recommendations.join('; ') : 'None'}
-URGENCY: ${response.urgency_note || 'None'}
-VERDICT: ${response.verdict || 'None'}
-TOP FLAGS: ${Array.isArray(response.top_flags) ? response.top_flags.join('; ') : 'None'}
+async function ensureDiagnosticQuotaAllowed(req) {
+  const quota = await getDiagnosticQuotaStatus({
+    deviceId: resolveDeviceId(req),
+    plan: req.requestPlan,
+    liveSessionId: resolveLiveSessionId(req),
+  });
+  if (!quota.allowed) {
+    const error = new Error(
+      'Your free FixEase diagnostics are used up for now. Upgrade to keep scanning.',
+    );
+    error.statusCode = 402;
+    error.errorCode = 'free_quota_exhausted';
+    error.retryable = false;
+    throw error;
+  }
+  return quota;
+}
 
-Return one short question only.`;
+async function consumeDiagnosticQuotaForRequest(req) {
+  return consumeDiagnosticQuota({
+    deviceId: resolveDeviceId(req),
+    plan: req.requestPlan,
+    liveSessionId: resolveLiveSessionId(req),
+  });
+}
+
+function serializeQuotaStatus(quota) {
+  return {
+    allowed: quota.allowed,
+    unlimited: quota.unlimited,
+    limit: quota.limit,
+    remaining: quota.remaining,
+    used: quota.used,
+    window_days: quota.windowDays,
+    reset_at: quota.resetAt instanceof Date ? quota.resetAt.toISOString() : null,
+    session_consumed: quota.sessionConsumed,
+  };
 }
 
 function sendError(res, error) {
@@ -736,6 +992,42 @@ function sendError(res, error) {
 function normalizeError(error) {
   const message = String(error?.message || 'AI request failed');
   const lower = message.toLowerCase();
+  if (error?.errorCode === 'device_id_missing') {
+    return {
+      statusCode: 400,
+      message,
+      errorCode: error.errorCode,
+      retryable: false,
+    };
+  }
+  if (
+    error?.errorCode === 'free_quota_exhausted' ||
+    error?.errorCode === 'quota_verification_unavailable'
+  ) {
+    return {
+      statusCode: error?.statusCode || 503,
+      message,
+      errorCode: error?.errorCode,
+      retryable: error?.retryable ?? true,
+    };
+  }
+  if (error?.statusCode === 503 || lower.includes('queue_full') || lower.includes('queue_timeout')) {
+    return {
+      statusCode: 503,
+      message:
+        'FixEase is handling a burst of requests right now. Please retry in a moment.',
+      errorCode: error?.errorCode || 'server_busy',
+      retryable: true,
+    };
+  }
+  if (error?.statusCode === 504 || lower.includes('timed out')) {
+    return {
+      statusCode: 504,
+      message: 'The AI provider took too long to respond. Please retry shortly.',
+      errorCode: error?.errorCode || 'upstream_timeout',
+      retryable: true,
+    };
+  }
   if (lower.includes('quota') || lower.includes('429') || lower.includes('resource_exhausted')) {
     return {
       statusCode: 429,
@@ -772,8 +1064,7 @@ wss.on('connection', async (ws, req) => {
   console.log(`[${new Date().toISOString()}] WS /api/live/stream connected`);
 
   try {
-    const ai = getAi();
-    const session = await ai.live.connect({
+    const session = await aiClient.live.connect({
       model: liveModel,
       config: {
         responseModalities: ["AUDIO"],
@@ -848,6 +1139,8 @@ wss.on('connection', async (ws, req) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[UnhandledRejection]', reason);
 });
+
+await initializeQuotaStore();
 
 httpServer.listen(port, '0.0.0.0', () => {
   console.log(`FixEase AI backend listening on http://0.0.0.0:${port}`);

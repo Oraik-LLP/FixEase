@@ -21,6 +21,7 @@ import 'services/conversation_service.dart';
 import 'services/diagnostic_service.dart';
 import 'services/garage_service.dart';
 import 'services/local_store_service.dart';
+import 'services/quota_service.dart';
 import 'services/reminder_scheduler_service.dart';
 import 'services/subscription_service.dart';
 import 'services/vehicle_service.dart';
@@ -30,11 +31,24 @@ import 'widgets/neuomorphic.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocalStoreService.init();
-  try { await VehicleService.instance.load(); } catch (_) {}
-  try { await DiagnosticService.instance.load(); } catch (_) {}
-  try { await ConversationService.instance.load(); } catch (_) {}
-  try { await GarageService.instance.load(); } catch (_) {}
-  try { await SubscriptionService.instance.restore(); } catch (_) {}
+  try {
+    await VehicleService.instance.load();
+  } catch (_) {}
+  try {
+    await DiagnosticService.instance.load();
+  } catch (_) {}
+  try {
+    await ConversationService.instance.load();
+  } catch (_) {}
+  try {
+    await GarageService.instance.load();
+  } catch (_) {}
+  try {
+    await SubscriptionService.instance.restore();
+  } catch (_) {}
+  try {
+    await QuotaService.instance.refreshStatus();
+  } catch (_) {}
   try {
     await ReminderSchedulerService.instance.initialize(
       requestPermissions: false,
@@ -210,6 +224,9 @@ class AppShellState extends State<AppShell> {
     try {
       await SubscriptionService.instance.refreshMonthlyCreditsForDisplay();
     } catch (_) {}
+    try {
+      await QuotaService.instance.refreshStatus();
+    } catch (_) {}
   }
 
   @override
@@ -380,10 +397,17 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   Text('Start Diagnostic', style: tt.headlineMedium),
                   const Spacer(),
                   ListenableBuilder(
-                    listenable: SubscriptionService.instance,
+                    listenable: Listenable.merge([
+                      SubscriptionService.instance,
+                      QuotaService.instance,
+                    ]),
                     builder: (_, __) {
                       final sub = SubscriptionService.instance;
-                      if (sub.isUnlimited) return const SizedBox.shrink();
+                      final badgeLabel =
+                          QuotaService.instance.diagnosticsBadgeLabel;
+                      if (sub.isUnlimited || badgeLabel == null) {
+                        return const SizedBox.shrink();
+                      }
                       return GestureDetector(
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
@@ -397,7 +421,7 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                             color: AppColors.accent.withValues(alpha: 0.12),
                           ),
                           child: Text(
-                            '${sub.diagnosticsRemaining} left',
+                            badgeLabel,
                             style: tt.bodySmall?.copyWith(
                               color: AppColors.accent,
                               fontWeight: FontWeight.w600,
@@ -410,6 +434,8 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   ),
                 ],
               ),
+              const SizedBox(height: 6),
+              const _FreeQuotaHelperText(),
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -444,7 +470,8 @@ class _HomeTabBodyState extends State<HomeTabBody> {
               GestureDetector(
                 onTap: () {
                   HapticFeedback.selectionClick();
-                  final shell = context.findAncestorStateOfType<AppShellState>();
+                  final shell =
+                      context.findAncestorStateOfType<AppShellState>();
                   shell?.switchTab(2);
                 },
                 child: NeuPane(
@@ -518,7 +545,8 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   final scorePct = hasRespScore
                       ? resp!.displayProgress
                       : (((latest?.healthScore ?? 0.0) / 10).clamp(0.0, 1.0));
-                  final subScores = resp?.normalizedSubScores ?? const <String, double>{};
+                  final subScores =
+                      resp?.normalizedSubScores ?? const <String, double>{};
 
                   return NeuPane(
                     child: Column(
@@ -556,12 +584,15 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                                   SizedBox(
                                                     width: double.infinity,
                                                     child: NeuSlider(
-                                                      value: resp?.usesHundredPointScale ==
-                                                              true
-                                                          ? (e.value / 100)
-                                                              .clamp(0.0, 1.0)
-                                                          : (e.value / 10)
-                                                              .clamp(0.0, 1.0),
+                                                      value:
+                                                          resp?.usesHundredPointScale ==
+                                                                  true
+                                                              ? (e.value / 100)
+                                                                  .clamp(
+                                                                      0.0, 1.0)
+                                                              : (e.value / 10)
+                                                                  .clamp(
+                                                                      0.0, 1.0),
                                                     ),
                                                   ),
                                                 ],
@@ -644,9 +675,10 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                     : null;
                             final scoreSuffix = hasDisplayableScore
                                 ? (response!.usesHundredPointScale ? '' : '/10')
-                                : (rawScore != null && rawScore > 10 ? '' : '/10');
-                            final isLocked =
-                                DiagnosticService.instance
+                                : (rawScore != null && rawScore > 10
+                                    ? ''
+                                    : '/10');
+                            final isLocked = DiagnosticService.instance
                                     .isOlderThanMostRecentSessions(
                                   s,
                                   allowedCount: 2,
@@ -672,15 +704,16 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                   if (!context.mounted) return;
                                   Navigator.of(context).push(
                                     MaterialPageRoute<void>(
-                                      builder: (_) => s.type == DiagnosticType.live
+                                      builder: (_) => s.type ==
+                                              DiagnosticType.live
                                           ? ConversationChatScreen(session: s)
                                           : ReportDetailScreen(session: s),
-                                      ),
-                                    );
-                                  },
+                                    ),
+                                  );
+                                },
                                 child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 6),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 6),
                                   child: Row(
                                     children: [
                                       Icon(
@@ -703,8 +736,10 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                           '${switch (s.type) {
                                             DiagnosticType.urgent => "Urgent",
                                             DiagnosticType.photo => "Photo",
-                                            DiagnosticType.invoiceAudit => "Invoice Audit",
-                                            DiagnosticType.live => "Gemini Live",
+                                            DiagnosticType.invoiceAudit =>
+                                              "Invoice Audit",
+                                            DiagnosticType.live =>
+                                              "Gemini Live",
                                           }} · ${s.dateLabel}',
                                           style: tt.bodyMedium,
                                         ),
@@ -745,18 +780,19 @@ class _HomeTabBodyState extends State<HomeTabBody> {
     );
   }
 
-  void _startDiagnosis(
-      BuildContext context, Vehicle? vehicle, Widget screen) {
+  Future<void> _startDiagnosis(
+    BuildContext context,
+    Vehicle? vehicle,
+    Widget screen,
+  ) async {
     if (vehicle == null) {
       _showAddFirst(context);
       return;
     }
-    final sub = SubscriptionService.instance;
-    if (!sub.canDiagnose) {
-      Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) =>
-            const PaywallScreen(requiredFeature: 'More diagnostics'),
-      ));
+    final allowed = await QuotaService.instance.ensureCanStartDiagnosis(
+      context,
+    );
+    if (!allowed || !context.mounted) {
       return;
     }
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -800,8 +836,7 @@ class _VehicleHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final brandColor =
-        Color(CarImageService.brandTint(vehicle.make));
+    final brandColor = Color(CarImageService.brandTint(vehicle.make));
 
     return Stack(
       children: [
@@ -1002,7 +1037,7 @@ class _EmptyHero extends StatelessWidget {
 class DiagnoseTabBody extends StatelessWidget {
   const DiagnoseTabBody({super.key});
 
-  void _guardedLaunch(BuildContext context, Widget screen) {
+  Future<void> _guardedLaunch(BuildContext context, Widget screen) async {
     final v = VehicleService.instance.selected;
     if (v == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1010,12 +1045,10 @@ class DiagnoseTabBody extends StatelessWidget {
       );
       return;
     }
-    final sub = SubscriptionService.instance;
-    if (!sub.canDiagnose) {
-      Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) =>
-            const PaywallScreen(requiredFeature: 'More diagnostics'),
-      ));
+    final allowed = await QuotaService.instance.ensureCanStartDiagnosis(
+      context,
+    );
+    if (!allowed || !context.mounted) {
       return;
     }
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -1037,19 +1070,26 @@ class DiagnoseTabBody extends StatelessWidget {
               Text('Choose Diagnostic Mode', style: tt.headlineMedium),
               const Spacer(),
               ListenableBuilder(
-                listenable: SubscriptionService.instance,
+                listenable: Listenable.merge([
+                  SubscriptionService.instance,
+                  QuotaService.instance,
+                ]),
                 builder: (_, __) {
                   final sub = SubscriptionService.instance;
-                  if (sub.isUnlimited) return const SizedBox.shrink();
+                  final badgeLabel =
+                      QuotaService.instance.diagnosticsBadgeLabel;
+                  if (sub.isUnlimited || badgeLabel == null) {
+                    return const SizedBox.shrink();
+                  }
                   return Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(8),
                       color: AppColors.accent.withValues(alpha: 0.12),
                     ),
                     child: Text(
-                      '${sub.diagnosticsRemaining} left',
+                      badgeLabel,
                       style: tt.bodySmall?.copyWith(
                         color: AppColors.accent,
                         fontWeight: FontWeight.w600,
@@ -1066,6 +1106,8 @@ class DiagnoseTabBody extends StatelessWidget {
             'Select how you\'d like to diagnose your vehicle.',
             style: tt.bodyMedium,
           ),
+          const SizedBox(height: 6),
+          const _FreeQuotaHelperText(),
           const SizedBox(height: 24),
 
           _DiagnoseOptionCard(
@@ -1075,8 +1117,7 @@ class DiagnoseTabBody extends StatelessWidget {
                 'Answer quick questions about symptoms you\'re experiencing '
                 'right now for an immediate AI analysis.',
             accentColor: const Color(0xFFFF9800),
-            onTap: () => _guardedLaunch(
-                context, const UrgentWizardScreen()),
+            onTap: () => _guardedLaunch(context, const UrgentWizardScreen()),
           ),
           const SizedBox(height: 14),
 
@@ -1087,8 +1128,7 @@ class DiagnoseTabBody extends StatelessWidget {
                 'Upload or take photos of the issue — our AI analyzes visible '
                 'damage, fluid leaks, tire wear, and more.',
             accentColor: AppColors.accent,
-            onTap: () => _guardedLaunch(
-                context, const PhotoDiagnoseScreen()),
+            onTap: () => _guardedLaunch(context, const PhotoDiagnoseScreen()),
           ),
           const SizedBox(height: 14),
 
@@ -1096,8 +1136,7 @@ class DiagnoseTabBody extends StatelessWidget {
           _DiagnoseOptionCard(
             icon: Icons.videocam_rounded,
             title: 'Gemini Live',
-            description:
-                'Real-time AI diagnosis via your camera. '
+            description: 'Real-time AI diagnosis via your camera. '
                 'Point, capture, and chat with Gemini about what it sees.',
             accentColor: const Color(0xFF4CAF50),
             badge: 'BETA',
@@ -1183,8 +1222,7 @@ class _DiagnoseOptionCard extends StatelessWidget {
                   Row(
                     children: [
                       Text('Start',
-                          style: tt.labelLarge
-                              ?.copyWith(color: accentColor)),
+                          style: tt.labelLarge?.copyWith(color: accentColor)),
                       const SizedBox(width: 4),
                       Icon(Icons.arrow_forward_rounded,
                           size: 16, color: accentColor),
@@ -1196,6 +1234,37 @@ class _DiagnoseOptionCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _FreeQuotaHelperText extends StatelessWidget {
+  const _FreeQuotaHelperText();
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        SubscriptionService.instance,
+        QuotaService.instance,
+      ]),
+      builder: (_, __) {
+        final sub = SubscriptionService.instance;
+        final subtitle = QuotaService.instance.diagnosticsSubtitleLabel;
+        if (sub.isUnlimited || subtitle == null) {
+          return const SizedBox.shrink();
+        }
+
+        return Text(
+          subtitle,
+          style: tt.bodySmall?.copyWith(
+            color: AppColors.textTertiary,
+            fontSize: 11,
+          ),
+        );
+      },
     );
   }
 }
@@ -1303,8 +1372,7 @@ class _ReportListCard extends StatelessWidget {
             : isLive
                 ? 'Gemini Live'
                 : 'Photo Diagnosis';
-    final isLocked =
-        DiagnosticService.instance.isOlderThanMostRecentSessions(
+    final isLocked = DiagnosticService.instance.isOlderThanMostRecentSessions(
           session,
           allowedCount: 2,
         ) &&
@@ -1323,8 +1391,8 @@ class _ReportListCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           color: const Color(0x33FF5252),
         ),
-        child: const Icon(Icons.delete_outline_rounded,
-            color: Color(0xFFFF5252)),
+        child:
+            const Icon(Icons.delete_outline_rounded, color: Color(0xFFFF5252)),
       ),
       confirmDismiss: (_) async {
         HapticFeedback.mediumImpact();
@@ -1332,8 +1400,8 @@ class _ReportListCard extends StatelessWidget {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: AppColors.surface,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
             title: Text('Delete Report', style: tt.titleLarge),
             content: Text('This report will be permanently deleted.',
                 style: tt.bodyMedium),
@@ -1352,152 +1420,152 @@ class _ReportListCard extends StatelessWidget {
           ),
         );
       },
-      onDismissed: (_) =>
-          DiagnosticService.instance.delete(session.id),
+      onDismissed: (_) => DiagnosticService.instance.delete(session.id),
       child: Opacity(
         opacity: isLocked ? 0.68 : 1,
         child: GestureDetector(
-        onTap: () async {
-          HapticFeedback.selectionClick();
-          if (isLocked) {
-            await ensureAccess(
-              context,
-              FeatureType.olderHistoryAccess,
-              session: session,
-              reason: 'Older Diagnostic History',
-            );
-            return;
-          }
-          if (!context.mounted) return;
-          Navigator.of(context).push(MaterialPageRoute<void>(
-            builder: (_) => isLive
-                ? ConversationChatScreen(session: session)
-                : ReportDetailScreen(session: session),
-          ));
-        },
-        child: NeuPane(
-          child: Row(
-            children: [
-              // health score ring (mini)
-              SizedBox(
-                width: 52,
-                height: 52,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    SizedBox(
-                      width: 52,
-                      height: 52,
-                      child: CircularProgressIndicator(
-                        value: (response?.displayProgress ??
-                                ((session.healthScore ?? 0) / 10))
-                            .clamp(0, 1)
-                            .toDouble(),
-                        strokeWidth: 3,
-                        backgroundColor: AppColors.surfaceHighlight,
-                        color: _scoreColor,
-                      ),
-                    ),
-                    Text(
-                      response?.displayScoreLabel ??
-                          (session.healthScore != null
-                              ? session.healthScore!.toStringAsFixed(1)
-                              : '—'),
-                      style: tt.bodySmall?.copyWith(
-                        color: _scoreColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          icon,
-                          size: 15,
-                          color: iconColor,
+          onTap: () async {
+            HapticFeedback.selectionClick();
+            if (isLocked) {
+              await ensureAccess(
+                context,
+                FeatureType.olderHistoryAccess,
+                session: session,
+                reason: 'Older Diagnostic History',
+              );
+              return;
+            }
+            if (!context.mounted) return;
+            Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => isLive
+                  ? ConversationChatScreen(session: session)
+                  : ReportDetailScreen(session: session),
+            ));
+          },
+          child: NeuPane(
+            child: Row(
+              children: [
+                // health score ring (mini)
+                SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: 52,
+                        height: 52,
+                        child: CircularProgressIndicator(
+                          value: (response?.displayProgress ??
+                                  ((session.healthScore ?? 0) / 10))
+                              .clamp(0, 1)
+                              .toDouble(),
+                          strokeWidth: 3,
+                          backgroundColor: AppColors.surfaceHighlight,
+                          color: _scoreColor,
                         ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: tt.titleMedium,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    if (session.vehicleName != null)
+                      ),
                       Text(
-                        session.vehicleName!,
+                        response?.displayScoreLabel ??
+                            (session.healthScore != null
+                                ? session.healthScore!.toStringAsFixed(1)
+                                : '—'),
                         style: tt.bodySmall?.copyWith(
-                            color: AppColors.accent),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                          color: _scoreColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
                       ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text(session.dateLabel, style: tt.bodySmall),
-                        const SizedBox(width: 8),
-                        Text(session.timeLabel,
-                            style: tt.bodySmall?.copyWith(
-                                color: AppColors.textTertiary)),
-                        const Spacer(),
-                        if (isLive)
-                          Flexible(
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            icon,
+                            size: 15,
+                            color: iconColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
                             child: Text(
-                              thread?.previewText ?? 'Saved conversation',
+                              title,
+                              style: tt.titleMedium,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      if (session.vehicleName != null)
+                        Text(
+                          session.vehicleName!,
+                          style:
+                              tt.bodySmall?.copyWith(color: AppColors.accent),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Text(session.dateLabel, style: tt.bodySmall),
+                          const SizedBox(width: 8),
+                          Text(session.timeLabel,
+                              style: tt.bodySmall
+                                  ?.copyWith(color: AppColors.textTertiary)),
+                          const Spacer(),
+                          if (isLive)
+                            Flexible(
+                              child: Text(
+                                thread?.previewText ?? 'Saved conversation',
+                                style: tt.bodySmall?.copyWith(
+                                  color: AppColors.textTertiary,
+                                  fontSize: 10,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.end,
+                              ),
+                            )
+                          else if (session.type == DiagnosticType.invoiceAudit)
+                            Text(
+                              session.aiResponseJson?['document_type']
+                                      as String? ??
+                                  'Bill review',
                               style: tt.bodySmall?.copyWith(
                                 color: AppColors.textTertiary,
                                 fontSize: 10,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
+                            )
+                          else if (session.symptoms.isNotEmpty)
+                            Text(
+                              '${session.symptoms.length} symptom(s)',
+                              style: tt.bodySmall?.copyWith(
+                                color: AppColors.textTertiary,
+                                fontSize: 10,
+                              ),
                             ),
-                          )
-                        else if (session.type == DiagnosticType.invoiceAudit)
-                          Text(
-                            session.aiResponseJson?['document_type'] as String? ??
-                                'Bill review',
-                            style: tt.bodySmall?.copyWith(
-                              color: AppColors.textTertiary,
-                              fontSize: 10,
-                            ),
-                          )
-                        else if (session.symptoms.isNotEmpty)
-                          Text(
-                            '${session.symptoms.length} symptom(s)',
-                            style: tt.bodySmall?.copyWith(
-                              color: AppColors.textTertiary,
-                              fontSize: 10,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                isLocked ? Icons.lock_rounded : Icons.chevron_right_rounded,
-                size: 18,
-                color: isLocked ? AppColors.accent : AppColors.textTertiary,
-              ),
-            ],
+                const SizedBox(width: 8),
+                Icon(
+                  isLocked ? Icons.lock_rounded : Icons.chevron_right_rounded,
+                  size: 18,
+                  color: isLocked ? AppColors.accent : AppColors.textTertiary,
+                ),
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -1511,12 +1579,8 @@ class ProfileTabBody extends StatelessWidget {
   const ProfileTabBody({super.key});
 
   Future<void> _openSupport() async {
-    final uri = Uri(
-      scheme: 'mailto',
-      path: AppConfig.supportEmail,
-      queryParameters: const {
-        'subject': 'FixEase Help and Support',
-      },
+    final uri = Uri.parse(
+      'mailto:${AppConfig.supportEmail}?subject=FixEase%20Support%20Request',
     );
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
@@ -1579,13 +1643,11 @@ class ProfileTabBody extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-
           _ProfileMenuItem(
             icon: Icons.directions_car_rounded,
             label: 'My Vehicles',
             onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                  builder: (_) => const MyVehiclesScreen()),
+              MaterialPageRoute<void>(builder: (_) => const MyVehiclesScreen()),
             ),
           ),
           _ProfileMenuItem(
@@ -1615,8 +1677,7 @@ class ProfileTabBody extends StatelessWidget {
               label: 'Subscription',
               subtitle: SubscriptionService.instance.tierLabel,
               onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                    builder: (_) => const PaywallScreen()),
+                MaterialPageRoute<void>(builder: (_) => const PaywallScreen()),
               ),
             ),
           ),
@@ -1639,6 +1700,7 @@ class ProfileTabBody extends StatelessWidget {
           _ProfileMenuItem(
             icon: Icons.help_outline_rounded,
             label: 'Help & Support',
+            subtitle: AppConfig.supportEmail,
             onTap: () {
               _openSupport();
             },
@@ -1706,5 +1768,3 @@ class _ProfileMenuItem extends StatelessWidget {
     );
   }
 }
-
-

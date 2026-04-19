@@ -1,4 +1,6 @@
+import 'dart:isolate';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -15,11 +17,13 @@ abstract final class ReportExportService {
     required DiagnosticSession session,
     required AiDiagnosticResponse response,
   }) async {
-    final pdf = await _buildPdf(session: session, response: response);
-    final bytes = await pdf.save();
+    final bytes = await _buildPdfBytes(session: session, response: response);
     final dir = await _resolveSaveDirectory();
-    final file = File(p.join(dir.path, fileName(session)));
-    await file.writeAsBytes(bytes, flush: true);
+    final filePath = p.join(dir.path, fileName(session));
+    await Isolate.run(
+      () => File(filePath).writeAsBytesSync(bytes, flush: true),
+    );
+    final file = File(filePath);
     return file;
   }
 
@@ -27,8 +31,7 @@ abstract final class ReportExportService {
     required DiagnosticSession session,
     required AiDiagnosticResponse response,
   }) async {
-    final pdf = await _buildPdf(session: session, response: response);
-    final bytes = await pdf.save();
+    final bytes = await _buildPdfBytes(session: session, response: response);
     await Printing.sharePdf(
       bytes: bytes,
       filename: fileName(session),
@@ -51,10 +54,28 @@ abstract final class ReportExportService {
     return getApplicationDocumentsDirectory();
   }
 
-  static Future<pw.Document> _buildPdf({
+  static Future<Uint8List> _buildPdfBytes({
     required DiagnosticSession session,
     required AiDiagnosticResponse response,
-  }) async {
+  }) {
+    final sessionJson = Map<String, dynamic>.from(session.toJson());
+    final responseJson = Map<String, dynamic>.from(response.toJson());
+    return Isolate.run(() async {
+      final rebuiltSession = DiagnosticSession.fromJson(sessionJson);
+      final rebuiltResponse = AiDiagnosticResponse.fromJson(responseJson);
+      final pdf = _buildPdfDocument(
+        session: rebuiltSession,
+        response: rebuiltResponse,
+      );
+      final bytes = await pdf.save();
+      return Uint8List.fromList(bytes);
+    });
+  }
+
+  static pw.Document _buildPdfDocument({
+    required DiagnosticSession session,
+    required AiDiagnosticResponse response,
+  }) {
     final pdf = pw.Document();
     final isUrgent = session.type == DiagnosticType.urgent;
     final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
@@ -142,7 +163,8 @@ abstract final class ReportExportService {
                   response.documentType != null &&
                   response.documentType!.isNotEmpty)
                 _detailRow('Document', response.documentType!),
-              if (session.description != null && session.description!.isNotEmpty)
+              if (session.description != null &&
+                  session.description!.isNotEmpty)
                 _detailRow(
                   isInvoiceAudit ? 'Visit Purpose' : 'Description',
                   session.description!,
@@ -174,7 +196,8 @@ abstract final class ReportExportService {
                 ),
               ],
             ),
-          _section(isInvoiceAudit ? 'Audit Summary' : 'Summary', [pw.Text(response.summary)]),
+          _section(isInvoiceAudit ? 'Audit Summary' : 'Summary',
+              [pw.Text(response.summary)]),
           if (response.urgencyNote != null && response.urgencyNote!.isNotEmpty)
             _section(
               'Urgency',

@@ -24,18 +24,22 @@ class ConversationMessage {
   final ConversationMessageSource source;
 
   bool get hasAttachment =>
-      attachmentPath != null || attachmentName != null || source != ConversationMessageSource.text;
+      attachmentPath != null ||
+      attachmentName != null ||
+      source != ConversationMessageSource.text;
 
   String get previewText {
     if (text.trim().isNotEmpty) return text.trim();
     return switch (source) {
       ConversationMessageSource.audio => 'Voice note',
-      ConversationMessageSource.image => attachmentName?.trim().isNotEmpty == true
-          ? 'Photo: $attachmentName'
-          : 'Photo attached',
-      ConversationMessageSource.file => attachmentName?.trim().isNotEmpty == true
-          ? 'File: $attachmentName'
-          : 'File attached',
+      ConversationMessageSource.image =>
+        attachmentName?.trim().isNotEmpty == true
+            ? 'Photo: $attachmentName'
+            : 'Photo attached',
+      ConversationMessageSource.file =>
+        attachmentName?.trim().isNotEmpty == true
+            ? 'File: $attachmentName'
+            : 'File attached',
       ConversationMessageSource.text => 'Message',
     };
   }
@@ -104,8 +108,7 @@ class ConversationThread {
   ConversationMessage? get latestMessage =>
       messages.isNotEmpty ? messages.last : null;
 
-  String get previewText =>
-      latestMessage?.previewText ?? 'No messages yet';
+  String get previewText => latestMessage?.previewText ?? 'No messages yet';
 
   Map<String, dynamic> toJson() => {
         'session_id': sessionId,
@@ -143,19 +146,38 @@ class ConversationAiResponse {
     required this.text,
     required this.provider,
     required this.isFallback,
+    this.requestSucceeded = false,
     this.errorCode,
   });
 
   final String text;
   final String provider;
   final bool isFallback;
+  final bool requestSucceeded;
   final String? errorCode;
+
+  ConversationAiResponse copyWith({
+    String? text,
+    String? provider,
+    bool? isFallback,
+    bool? requestSucceeded,
+    String? errorCode,
+  }) {
+    return ConversationAiResponse(
+      text: text ?? this.text,
+      provider: provider ?? this.provider,
+      isFallback: isFallback ?? this.isFallback,
+      requestSucceeded: requestSucceeded ?? this.requestSucceeded,
+      errorCode: errorCode ?? this.errorCode,
+    );
+  }
 
   factory ConversationAiResponse.fromJson(Map<String, dynamic> json) {
     return ConversationAiResponse(
       text: json['text'] as String? ?? '',
       provider: json['provider'] as String? ?? 'local',
       isFallback: json['is_fallback'] as bool? ?? false,
+      requestSucceeded: false,
       errorCode: json['error_code'] as String?,
     );
   }

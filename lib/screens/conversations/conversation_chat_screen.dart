@@ -13,6 +13,7 @@ import '../../models/diagnostic.dart';
 import '../../models/vehicle.dart';
 import '../../services/ai_service.dart';
 import '../../services/conversation_service.dart';
+import '../../services/file_validation_service.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
@@ -61,7 +62,8 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
   ConversationThread? get _thread =>
       ConversationService.instance.threadForSession(widget.session.id);
 
-  ThreadLimitStatus get _limits => SubscriptionService.instance.threadLimitStatus(
+  ThreadLimitStatus get _limits =>
+      SubscriptionService.instance.threadLimitStatus(
         sessionId: widget.session.id,
         sessionType: widget.session.type,
       );
@@ -89,7 +91,8 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
     if (_isLiveThread) {
       return _limits.liveHardBlocked ||
           _limits.liveImageLimitReached ||
-          ((_limits.liveAudioRemaining ?? 99) <= 2 && !_limits.liveAudioLimitReached);
+          ((_limits.liveAudioRemaining ?? 99) <= 2 &&
+              !_limits.liveAudioLimitReached);
     }
     return _limits.textAudioLimitReached || _limits.standardImageLimitReached;
   }
@@ -179,6 +182,16 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
     });
   }
 
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Future<void> _sendText() async {
     final raw = _messageCtrl.text.trim();
     if (raw.isEmpty || _isSending) return;
@@ -207,16 +220,32 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
     )) {
       return;
     }
-    final xfile = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 88,
-      maxWidth: 2200,
-    );
-    if (xfile == null) return;
-    await _sendAttachment(
-      File(xfile.path),
-      source: ConversationMessageSource.image,
-    );
+    try {
+      final xfile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 88,
+        maxWidth: 2200,
+      );
+      if (xfile == null) return;
+      final file = File(xfile.path);
+      final validation = await FileValidationService.validatePhoto(file);
+      if (!validation.isValid) {
+        _showMessage(validation.message!);
+        return;
+      }
+      await _sendAttachment(
+        file,
+        source: ConversationMessageSource.image,
+        attachmentMimeType: validation.mimeType,
+      );
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Camera access is required to attach photos. Please enable camera '
+        'permission in system settings and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not attach the selected photo: $error');
+    }
   }
 
   Future<void> _pickAttachment() async {
@@ -228,27 +257,43 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
     )) {
       return;
     }
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
-    );
-    final path = result?.files.single.path;
-    if (path == null || path.isEmpty) return;
-    final file = File(path);
-    final lower = path.toLowerCase();
-    final source = lower.endsWith('.jpg') ||
-            lower.endsWith('.jpeg') ||
-            lower.endsWith('.png') ||
-            lower.endsWith('.webp') ||
-            lower.endsWith('.heic')
-        ? ConversationMessageSource.image
-        : ConversationMessageSource.file;
-    await _sendAttachment(file, source: source);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
+      );
+      final path = result?.files.single.path;
+      if (path == null || path.isEmpty) return;
+      final file = File(path);
+      final validation =
+          await FileValidationService.validateInvoiceDocument(file);
+      if (!validation.isValid) {
+        _showMessage(validation.message!);
+        return;
+      }
+      final mimeType = validation.mimeType!;
+      final source = mimeType.startsWith('image/')
+          ? ConversationMessageSource.image
+          : ConversationMessageSource.file;
+      await _sendAttachment(
+        file,
+        source: source,
+        attachmentMimeType: mimeType,
+      );
+    } on PlatformException catch (_) {
+      _showMessage(
+        'Storage access is required to attach files. Please grant file access '
+        'permission and try again.',
+      );
+    } catch (error) {
+      _showMessage('Could not attach the selected file: $error');
+    }
   }
 
   Future<void> _sendAttachment(
     File file, {
     required ConversationMessageSource source,
+    String? attachmentMimeType,
   }) async {
     final note = _messageCtrl.text.trim();
     _messageCtrl.clear();
@@ -263,6 +308,7 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
       source: source,
       attachment: file,
       attachmentName: p.basename(file.path),
+      attachmentMimeType: attachmentMimeType,
     );
   }
 
@@ -283,23 +329,34 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
   }
 
   Future<void> _startRecording() async {
-    if (!await _recorder.hasPermission()) return;
+    if (!await _recorder.hasPermission()) {
+      _showMessage(
+        'Microphone access is required to send voice notes. Please enable '
+        'microphone permission in system settings and try again.',
+      );
+      return;
+    }
 
     final dir = await getTemporaryDirectory();
     final path =
         '${dir.path}/fixease_conversation_${DateTime.now().millisecondsSinceEpoch}.wav';
 
-    await _recorder.start(
-      const RecordConfig(
-        encoder: AudioEncoder.wav,
-        sampleRate: 16000,
-        numChannels: 1,
-        echoCancel: true,
-        noiseSuppress: true,
-        autoGain: true,
-      ),
-      path: path,
-    );
+    try {
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: 16000,
+          numChannels: 1,
+          echoCancel: true,
+          noiseSuppress: true,
+          autoGain: true,
+        ),
+        path: path,
+      );
+    } catch (error) {
+      _showMessage('Could not start voice recording: $error');
+      return;
+    }
 
     if (!mounted) return;
     setState(() => _isRecording = true);
@@ -341,13 +398,8 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
     File? attachment,
     File? audioFile,
     String? attachmentName,
+    String? attachmentMimeType,
   }) async {
-    await SubscriptionService.instance.recordThreadEvent(
-      sessionId: widget.session.id,
-      sessionType: widget.session.type,
-      event: _eventForSource(source),
-    );
-
     HapticFeedback.selectionClick();
     final replyQuestion = _replyToQuestion;
 
@@ -360,6 +412,7 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
       source: source,
       attachmentPath: attachment?.path,
       attachmentName: attachmentName,
+      attachmentMimeType: attachmentMimeType,
     );
 
     await ConversationService.instance.appendMessage(
@@ -386,6 +439,14 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
       audioFile: audioFile,
       attachment: attachment,
     );
+
+    if (reply.requestSucceeded) {
+      await SubscriptionService.instance.recordThreadEvent(
+        sessionId: widget.session.id,
+        sessionType: widget.session.type,
+        event: _eventForSource(source),
+      );
+    }
 
     await ConversationService.instance.appendMessage(
       sessionId: widget.session.id,
@@ -473,174 +534,182 @@ class _ConversationChatScreenState extends State<ConversationChatScreen> {
             listenable: SubscriptionService.instance,
             builder: (context, _) => Column(
               children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 12, 0),
-                child: Row(
-                  children: [
-                    FixEaseStepBackButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Continue Conversation', style: tt.titleLarge),
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.session.typeTitle,
-                            style: tt.bodySmall?.copyWith(
-                              color: AppColors.textTertiary,
-                            ),
-                          ),
-                        ],
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 4, 12, 0),
+                  child: Row(
+                    children: [
+                      FixEaseStepBackButton(
+                        onPressed: () => Navigator.of(context).pop(),
                       ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Continue Conversation', style: tt.titleLarge),
+                            const SizedBox(height: 2),
+                            Text(
+                              widget.session.typeTitle,
+                              style: tt.bodySmall?.copyWith(
+                                color: AppColors.textTertiary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (SubscriptionService.instance.isDemoMode)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                    child: _ThreadUsageStrip(
+                      isLiveThread: _isLiveThread,
+                      limits: _limits,
                     ),
-                  ],
-                ),
-              ),
-              if (SubscriptionService.instance.isDemoMode)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                  child: _ThreadUsageStrip(
-                    isLiveThread: _isLiveThread,
-                    limits: _limits,
                   ),
-                ),
-              Expanded(
-                child: ListenableBuilder(
-                  listenable: ConversationService.instance,
-                  builder: (context, _) {
-                    final thread = _thread;
-                    final messages = thread?.messages ?? const <ConversationMessage>[];
-                    _scrollToBottom();
+                Expanded(
+                  child: ListenableBuilder(
+                    listenable: ConversationService.instance,
+                    builder: (context, _) {
+                      final thread = _thread;
+                      final messages =
+                          thread?.messages ?? const <ConversationMessage>[];
+                      _scrollToBottom();
 
-                    if (messages.isEmpty) {
-                      return _EmptyConversationState(session: widget.session);
-                    }
+                      if (messages.isEmpty) {
+                        return _EmptyConversationState(session: widget.session);
+                      }
 
-                    return ListView.builder(
-                      controller: _scrollCtrl,
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                      itemCount: messages.length + (_isSending ? 1 : 0),
-                      itemBuilder: (context, index) {
-                        if (index == messages.length) {
-                          return const _ConversationTypingIndicator();
-                        }
-                        return _ConversationBubble(message: messages[index]);
-                      },
-                    );
-                  },
-                ),
-              ),
-              if (_replyToQuestion != null && _replyToQuestion!.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  child: _ReplyingBanner(
-                    question: _replyToQuestion!,
-                    onCancel: () {
-                      HapticFeedback.lightImpact();
-                      setState(() => _replyToQuestion = null);
-                    },
-                  ),
-                ),
-              if (_shouldShowLimitBanner)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                  child: _ConversationLimitBanner(
-                    title: _limitBannerTitle,
-                    subtitle: _limitBannerSubtitle,
-                    actionLabel: 'Upgrade to Pro',
-                    onAction: () {
-                      ensureAccess(
-                        context,
-                        _bannerFeature,
-                        session: widget.session,
-                        reason: _upgradeReason(_bannerFeature),
+                      return ListView.builder(
+                        controller: _scrollCtrl,
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                        itemCount: messages.length + (_isSending ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == messages.length) {
+                            return const _ConversationTypingIndicator();
+                          }
+                          return _ConversationBubble(message: messages[index]);
+                        },
                       );
                     },
                   ),
                 ),
-              SafeArea(
-                top: false,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface.withValues(alpha: 0.5),
-                    border: const Border(
-                      top: BorderSide(color: Color(0x0CFFFFFF)),
+                if (_replyToQuestion != null && _replyToQuestion!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: _ReplyingBanner(
+                      question: _replyToQuestion!,
+                      onCancel: () {
+                        HapticFeedback.lightImpact();
+                        setState(() => _replyToQuestion = null);
+                      },
                     ),
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      _ComposerButton(
-                        icon: Icons.camera_alt_rounded,
-                        enabled: !_isSending && !_isRecording && !_mediaBlocked,
-                        onTap: _pickCamera,
+                if (_shouldShowLimitBanner)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                    child: _ConversationLimitBanner(
+                      title: _limitBannerTitle,
+                      subtitle: _limitBannerSubtitle,
+                      actionLabel: 'Upgrade to Pro',
+                      onAction: () {
+                        ensureAccess(
+                          context,
+                          _bannerFeature,
+                          session: widget.session,
+                          reason: _upgradeReason(_bannerFeature),
+                        );
+                      },
+                    ),
+                  ),
+                SafeArea(
+                  top: false,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface.withValues(alpha: 0.5),
+                      border: const Border(
+                        top: BorderSide(color: Color(0x0CFFFFFF)),
                       ),
-                      const SizedBox(width: 8),
-                      _ComposerButton(
-                        icon: Icons.attach_file_rounded,
-                        enabled: !_isSending && !_isRecording && !_mediaBlocked,
-                        onTap: _pickAttachment,
-                      ),
-                      const SizedBox(width: 8),
-                      _ComposerButton(
-                        icon: _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
-                        enabled: !_isSending && !_textInputBlocked,
-                        active: _isRecording,
-                        onTap: _toggleRecording,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: NeuTextField(
-                          hint: _composerHint,
-                          icon: Icons.chat_rounded,
-                          controller: _messageCtrl,
-                          readOnly: _textInputBlocked || _isRecording,
-                          onTap: _textInputBlocked
-                              ? () {
-                                  ensureAccess(
-                                    context,
-                                    _bannerFeature,
-                                    session: widget.session,
-                                    reason: _upgradeReason(_bannerFeature),
-                                  );
-                                }
-                              : null,
-                          onSubmitted: (_) => _sendText(),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (_textInputBlocked)
-                        SizedBox(
-                          width: 132,
-                          child: NeuPrimaryButton(
-                            expanded: false,
-                            label: 'Upgrade',
-                            onPressed: () {
-                              ensureAccess(
-                                context,
-                                _bannerFeature,
-                                session: widget.session,
-                                reason: _upgradeReason(_bannerFeature),
-                              );
-                            },
-                          ),
-                        )
-                      else
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
                         _ComposerButton(
-                          icon: Icons.send_rounded,
-                          enabled: !_isSending && !_isRecording,
-                          filled: true,
-                          onTap: _sendText,
+                          icon: Icons.camera_alt_rounded,
+                          enabled:
+                              !_isSending && !_isRecording && !_mediaBlocked,
+                          onTap: _pickCamera,
                         ),
-                    ],
+                        const SizedBox(width: 8),
+                        _ComposerButton(
+                          icon: Icons.attach_file_rounded,
+                          enabled:
+                              !_isSending && !_isRecording && !_mediaBlocked,
+                          onTap: _pickAttachment,
+                        ),
+                        const SizedBox(width: 8),
+                        _ComposerButton(
+                          icon: _isRecording
+                              ? Icons.stop_rounded
+                              : Icons.mic_rounded,
+                          enabled: !_isSending && !_textInputBlocked,
+                          active: _isRecording,
+                          onTap: _toggleRecording,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: NeuTextField(
+                            hint: _composerHint,
+                            icon: Icons.chat_rounded,
+                            controller: _messageCtrl,
+                            keyboardType: TextInputType.multiline,
+                            minLines: 1,
+                            maxLines: 4,
+                            textInputAction: TextInputAction.newline,
+                            readOnly: _textInputBlocked || _isRecording,
+                            onTap: _textInputBlocked
+                                ? () {
+                                    ensureAccess(
+                                      context,
+                                      _bannerFeature,
+                                      session: widget.session,
+                                      reason: _upgradeReason(_bannerFeature),
+                                    );
+                                  }
+                                : null,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (_textInputBlocked)
+                          SizedBox(
+                            width: 132,
+                            child: NeuPrimaryButton(
+                              expanded: false,
+                              label: 'Upgrade',
+                              onPressed: () {
+                                ensureAccess(
+                                  context,
+                                  _bannerFeature,
+                                  session: widget.session,
+                                  reason: _upgradeReason(_bannerFeature),
+                                );
+                              },
+                            ),
+                          )
+                        else
+                          _ComposerButton(
+                            icon: Icons.send_rounded,
+                            enabled: !_isSending && !_isRecording,
+                            filled: true,
+                            onTap: _sendText,
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
             ),
           ),
         ),
@@ -792,9 +861,8 @@ class _UsageStatChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final limit = data.limit;
-    final ratio = limit == null || limit == 0
-        ? 0.0
-        : (data.used / limit).clamp(0.0, 1.0);
+    final ratio =
+        limit == null || limit == 0 ? 0.0 : (data.used / limit).clamp(0.0, 1.0);
     final isNearCap = limit != null && ratio >= 0.8;
     final accent = isNearCap ? const Color(0xFFFFB366) : AppColors.accent;
 
@@ -1037,7 +1105,8 @@ class _ConversationBubble extends StatelessWidget {
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: maxBubbleWidth),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.only(
                     topLeft: const Radius.circular(16),
@@ -1110,8 +1179,8 @@ class _ConversationBubble extends StatelessWidget {
                         ),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(10),
-                          color:
-                              AppColors.surfaceHighlight.withValues(alpha: 0.35),
+                          color: AppColors.surfaceHighlight
+                              .withValues(alpha: 0.35),
                         ),
                         child: Row(
                           children: [

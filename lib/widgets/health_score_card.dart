@@ -51,7 +51,9 @@ class DiagnosticResultCard extends StatelessWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                _isInvoiceAudit ? 'Bill Fairness' : 'Vehicle Health',
+                                _isInvoiceAudit
+                                    ? 'Bill Fairness'
+                                    : 'Vehicle Health',
                                 style: tt.titleLarge,
                               ),
                             ),
@@ -151,7 +153,7 @@ class DiagnosticResultCard extends StatelessWidget {
                   _SubScoreRow(
                     label: entry.key,
                     score: entry.value,
-                    isInvoiceAudit: _isInvoiceAudit,
+                    usesHundredPointScale: response.usesHundredPointScale,
                   ),
                   const SizedBox(height: 8),
                 ],
@@ -180,8 +182,7 @@ class DiagnosticResultCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
         ],
-        if (_isInvoiceAudit &&
-            response.paddingPatternsDetected.isNotEmpty) ...[
+        if (_isInvoiceAudit && response.paddingPatternsDetected.isNotEmpty) ...[
           _BulletSection(
             title: 'Padding Patterns Detected',
             items: response.paddingPatternsDetected,
@@ -292,7 +293,8 @@ class DiagnosticClarifyingQuestionPrompt extends StatelessWidget {
     return ListenableBuilder(
       listenable: ConversationService.instance,
       builder: (context, _) {
-        final thread = ConversationService.instance.threadForSession(session.id);
+        final thread =
+            ConversationService.instance.threadForSession(session.id);
         final hasConversation = (thread?.messages.isNotEmpty ?? false);
         if (hasConversation) {
           return const SizedBox.shrink();
@@ -577,17 +579,17 @@ class _SubScoreRow extends StatelessWidget {
   const _SubScoreRow({
     required this.label,
     required this.score,
-    required this.isInvoiceAudit,
+    required this.usesHundredPointScale,
   });
 
   final String label;
   final double score;
-  final bool isInvoiceAudit;
+  final bool usesHundredPointScale;
 
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final pct = isInvoiceAudit
+    final pct = usesHundredPointScale
         ? (score / 100).clamp(0.0, 1.0)
         : (score / 10).clamp(0.0, 1.0);
 
@@ -600,9 +602,11 @@ class _SubScoreRow extends StatelessWidget {
         Expanded(child: NeuSlider(value: pct)),
         const SizedBox(width: 8),
         SizedBox(
-          width: isInvoiceAudit ? 38 : 30,
+          width: usesHundredPointScale ? 38 : 30,
           child: Text(
-            isInvoiceAudit ? score.round().toString() : score.toStringAsFixed(1),
+            usesHundredPointScale
+                ? score.round().toString()
+                : score.toStringAsFixed(1),
             style: tt.bodySmall?.copyWith(
               color: AppColors.textPrimary,
               fontWeight: FontWeight.w600,
