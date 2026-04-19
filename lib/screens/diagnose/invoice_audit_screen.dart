@@ -36,6 +36,7 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
   int _step = 0; // 0=pick, 1=review, 2=analyzing, 3=result
   AiDiagnosticResponse? _result;
   DiagnosticSession? _session;
+  bool _hasPromptedReview = false;
 
   bool get _hasDocument => _document != null;
   bool get _isPdf =>
@@ -203,13 +204,6 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
         _result = response;
         _session = session;
         _step = 3;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ReviewPromptService.instance.maybePrompt(
-          context,
-          trigger: ReviewPromptTrigger.diagnosisSuccess,
-        );
       });
     } catch (e) {
       if (!mounted) return;
@@ -480,8 +474,19 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
   }
 
   Widget _buildResult(TextTheme tt) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+    return NotificationListener<ScrollNotification>(
+      onNotification: (scrollInfo) {
+        if (!_hasPromptedReview && scrollInfo.metrics.pixels > 150) {
+          _hasPromptedReview = true;
+          ReviewPromptService.instance.maybePrompt(
+            context,
+            trigger: ReviewPromptTrigger.diagnosisSuccess,
+          );
+        }
+        return false;
+      },
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -526,7 +531,7 @@ class _InvoiceAuditScreenState extends State<InvoiceAuditScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 }
 

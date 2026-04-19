@@ -37,6 +37,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   AiDiagnosticResponse? _result;
   DiagnosticSession? _session;
   bool _useObdInsight = true;
+  bool _hasPromptedReview = false;
 
   @override
   void initState() {
@@ -215,13 +216,6 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
         _result = response;
         _session = session;
         _step = 3;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ReviewPromptService.instance.maybePrompt(
-          context,
-          trigger: ReviewPromptTrigger.diagnosisSuccess,
-        );
       });
     } catch (e) {
       if (!mounted) return;
@@ -597,8 +591,19 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   // ── Step 3: Result ────────────────────────────────────────────────────
 
   Widget _buildResult(TextTheme tt) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+    return NotificationListener<ScrollNotification>(
+      onNotification: (scrollInfo) {
+        if (!_hasPromptedReview && scrollInfo.metrics.pixels > 150) {
+          _hasPromptedReview = true;
+          ReviewPromptService.instance.maybePrompt(
+            context,
+            trigger: ReviewPromptTrigger.diagnosisSuccess,
+          );
+        }
+        return false;
+      },
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -666,7 +671,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 }
 

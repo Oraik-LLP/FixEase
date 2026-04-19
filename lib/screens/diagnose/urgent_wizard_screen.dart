@@ -34,6 +34,7 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
   bool _submitting = false;
   AiDiagnosticResponse? _result;
   DiagnosticSession? _session;
+  bool _hasPromptedReview = false;
 
   bool get _canProceed => switch (_step) {
         0 => _selectedSymptoms.isNotEmpty,
@@ -107,13 +108,6 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
         _result = response;
         _session = session;
         _submitting = false;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ReviewPromptService.instance.maybePrompt(
-          context,
-          trigger: ReviewPromptTrigger.diagnosisSuccess,
-        );
       });
     } catch (e) {
       if (!mounted) return;
@@ -453,8 +447,19 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
   // ── Result view ───────────────────────────────────────────────────────
 
   Widget _buildResultView(TextTheme tt) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+    return NotificationListener<ScrollNotification>(
+      onNotification: (scrollInfo) {
+        if (!_hasPromptedReview && scrollInfo.metrics.pixels > 150) {
+          _hasPromptedReview = true;
+          ReviewPromptService.instance.maybePrompt(
+            context,
+            trigger: ReviewPromptTrigger.diagnosisSuccess,
+          );
+        }
+        return false;
+      },
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -515,7 +520,7 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 }
 

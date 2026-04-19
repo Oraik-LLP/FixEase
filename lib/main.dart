@@ -1737,14 +1737,25 @@ class ProfileTabBody extends StatelessWidget {
               label: 'Reset Free Credits',
               subtitle: 'Restore the free 3-diagnosis allowance',
               onTap: () async {
-                await SubscriptionService.instance.resetFreeCreditsForTesting();
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Free credits reset for testing'),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
+                try {
+                  await SubscriptionService.instance.resetFreeCreditsForTesting();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Free credits reset for testing'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                } catch (e) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(e.toString()),
+                      behavior: SnackBarBehavior.floating,
+                      backgroundColor: Colors.red.shade800,
+                    ),
+                  );
+                }
               },
             ),
           _ProfileMenuItem(
