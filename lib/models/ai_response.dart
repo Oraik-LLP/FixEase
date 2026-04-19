@@ -104,6 +104,9 @@ class AiDiagnosticResponse {
 
   bool get isInvoiceAudit => hasInvoiceAuditData;
 
+  bool get hasDisplayableScore =>
+      !(isFallback && errorCode == 'parse_failed');
+
   bool get usesHundredPointScale {
     if (isInvoiceAudit) return true;
     if (healthScore > 10) return true;

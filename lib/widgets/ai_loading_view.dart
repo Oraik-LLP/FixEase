@@ -156,28 +156,19 @@ class _AiLoadingViewState extends State<AiLoadingView> {
                 );
               }),
             ),
-            const SizedBox(height: 22),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                color: AppColors.surfaceHighlight.withValues(alpha: 0.22),
-                border: Border.all(color: const Color(0x10FFFFFF), width: 0.6),
-              ),
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: Text(
-                  currentTip.isEmpty
-                      ? 'Cross-checking the result for clear next steps.'
-                      : currentTip,
-                  key: ValueKey(currentTip.isEmpty ? 'default-tip' : currentTip),
-                  style: tt.bodySmall?.copyWith(
-                    color: AppColors.textSecondary,
-                    height: 1.45,
-                  ),
-                  textAlign: TextAlign.center,
+            const SizedBox(height: 18),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: Text(
+                currentTip.isEmpty
+                    ? 'Cross-checking the result for clear next steps.'
+                    : currentTip,
+                key: ValueKey(currentTip.isEmpty ? 'default-tip' : currentTip),
+                style: tt.bodySmall?.copyWith(
+                  color: AppColors.textTertiary,
+                  height: 1.45,
                 ),
+                textAlign: TextAlign.center,
               ),
             ),
           ],

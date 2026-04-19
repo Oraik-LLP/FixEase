@@ -12,7 +12,6 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_fonts: ^6.2.1
   flutter_launcher_icons: ^0.14.4
-  supabase_flutter: ^2.8.4
   image_picker: ^1.1.2
   file_picker: ^8.1.2
   http: ^1.2.2
@@ -31,6 +30,11 @@ dependencies:
   workmanager: ^0.9.0+3
   timezone: ^0.11.0
   flutter_timezone: ^5.0.2
+  purchases_flutter: ^8.10.1
+  flutter_image_compress: ^2.4.0
+  in_app_review: ^2.0.10
+  url_launcher: ^6.3.1
+  ntp: ^2.0.0
 
 dev_dependencies:
   flutter_test:

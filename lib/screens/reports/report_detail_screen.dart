@@ -9,6 +9,7 @@ import '../conversations/conversation_chat_screen.dart';
 import '../../services/conversation_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/app_markdown_text.dart';
 import '../../widgets/health_score_card.dart';
 import '../../widgets/neuomorphic.dart';
 import '../../widgets/report_export_button.dart';
@@ -20,14 +21,17 @@ class ReportDetailScreen extends StatelessWidget {
   AiDiagnosticResponse? get _aiResponse {
     try {
       if (session.aiResponseJson != null) {
-        return AiDiagnosticResponse.fromJson(session.aiResponseJson!);
+        final response = AiDiagnosticResponse.fromJson(session.aiResponseJson!);
+        return response.hasDisplayableScore ? response : null;
       }
       if (session.aiResponse != null) {
-        return AiDiagnosticResponse.fallback(session.aiResponse!);
+        final fallback = AiDiagnosticResponse.fallback(session.aiResponse!);
+        return fallback.hasDisplayableScore ? fallback : null;
       }
     } catch (_) {
       if (session.aiResponse != null) {
-        return AiDiagnosticResponse.fallback(session.aiResponse!);
+        final fallback = AiDiagnosticResponse.fallback(session.aiResponse!);
+        return fallback.hasDisplayableScore ? fallback : null;
       }
     }
     return null;
@@ -120,7 +124,7 @@ class ReportDetailScreen extends StatelessWidget {
                                 ],
                               ),
                               const SizedBox(height: 10),
-                              Text(resp.summary, style: tt.bodyMedium),
+                              AppMarkdownText(resp.summary, style: tt.bodyMedium),
                             ],
                           ),
                         ),
@@ -145,15 +149,27 @@ class ReportDetailScreen extends StatelessWidget {
                               const Icon(Icons.info_outline_rounded,
                                   size: 40, color: AppColors.textTertiary),
                               const SizedBox(height: 12),
-                              Text('No detailed AI data available',
+                              Text('Diagnosis temporarily unavailable',
                                   style: tt.bodyMedium),
                               const SizedBox(height: 4),
                               Text(
-                                'This report was created before detailed '
-                                'AI analysis was stored.',
+                                'We could not complete the AI report because of a backend or connection issue. Please try again in a little while.',
                                 style: tt.bodySmall,
                                 textAlign: TextAlign.center,
                               ),
+                              if (session.aiResponseJson?['error_code'] != null ||
+                                  session.aiResponse != null) ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  'Error code: '
+                                  '${session.aiResponseJson?['error_code'] ?? 'report_unavailable'}',
+                                  style: tt.bodySmall?.copyWith(
+                                    color: AppColors.textTertiary,
+                                    fontFamily: 'monospace',
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -842,7 +858,7 @@ class _CausesSection extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(causes[i], style: tt.bodyMedium),
+                    child: AppMarkdownText(causes[i], style: tt.bodyMedium),
                   ),
                 ],
               ),
@@ -905,7 +921,7 @@ class _RecommendationsSection extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(items[i], style: tt.bodyMedium),
+                    child: AppMarkdownText(items[i], style: tt.bodyMedium),
                   ),
                 ],
               ),

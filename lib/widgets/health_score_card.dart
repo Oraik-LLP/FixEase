@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
 import '../services/conversation_service.dart';
-import '../theme/app_theme.dart';
 import '../screens/conversations/conversation_chat_screen.dart';
+import '../theme/app_theme.dart';
+import 'app_markdown_text.dart';
 import 'neuomorphic.dart';
 import 'report_export_button.dart';
 
@@ -131,7 +132,7 @@ class DiagnosticResultCard extends StatelessWidget {
               Text(_isInvoiceAudit ? 'Audit Summary' : 'AI Summary',
                   style: tt.titleMedium),
               const SizedBox(height: 8),
-              Text(response.summary, style: tt.bodyMedium),
+              AppMarkdownText(response.summary, style: tt.bodyMedium),
             ],
           ),
         ),
@@ -218,7 +219,10 @@ class DiagnosticResultCard extends StatelessWidget {
               children: [
                 Text('Negotiation Script', style: tt.titleMedium),
                 const SizedBox(height: 8),
-                Text(response.negotiationScript!, style: tt.bodyMedium),
+                AppMarkdownText(
+                  response.negotiationScript!,
+                  style: tt.bodyMedium,
+                ),
               ],
             ),
           ),
@@ -252,7 +256,10 @@ class DiagnosticResultCard extends StatelessWidget {
                   style: tt.titleMedium,
                 ),
                 const SizedBox(height: 8),
-                Text(response.mechanicScript!, style: tt.bodyMedium),
+                AppMarkdownText(
+                  response.mechanicScript!,
+                  style: tt.bodyMedium,
+                ),
               ],
             ),
           ),
@@ -421,7 +428,9 @@ class _BulletSection extends StatelessWidget {
                     child: Icon(Icons.circle, size: 6, color: bulletColor),
                   ),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(item, style: tt.bodyMedium)),
+                  Expanded(
+                    child: AppMarkdownText(item, style: tt.bodyMedium),
+                  ),
                 ],
               ),
             ),
@@ -474,7 +483,9 @@ class _NumberedSection extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(items[index], style: tt.bodyMedium)),
+                  Expanded(
+                    child: AppMarkdownText(items[index], style: tt.bodyMedium),
+                  ),
                 ],
               ),
             ),
@@ -528,7 +539,7 @@ class _InvoiceLineItemRow extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          Text(item.reason, style: tt.bodyMedium),
+          AppMarkdownText(item.reason, style: tt.bodyMedium),
           const SizedBox(height: 6),
           Text('Confidence: ${item.confidence}', style: tt.bodySmall),
         ],

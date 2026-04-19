@@ -5,6 +5,8 @@ import '../../models/diagnostic.dart';
 import '../conversations/conversation_chat_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
+import '../../services/review_prompt_service.dart';
+import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/ai_loading_view.dart';
@@ -96,12 +98,22 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
       );
 
       await DiagnosticService.instance.save(session);
+      if (!response.isFallback) {
+        await SubscriptionService.instance.recordDiagnosis();
+      }
 
       if (!mounted) return;
       setState(() {
         _result = response;
         _session = session;
         _submitting = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ReviewPromptService.instance.maybePrompt(
+          context,
+          trigger: ReviewPromptTrigger.diagnosisSuccess,
+        );
       });
     } catch (e) {
       if (!mounted) return;
@@ -129,12 +141,26 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
 
-    return Scaffold(
-      body: AppBackground(
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_submitting) {
+          Navigator.of(context).pop();
+          return;
+        }
+        if (_result != null) {
+          Navigator.of(context).pop();
+          return;
+        }
+        _back();
+      },
+      child: Scaffold(
+        body: AppBackground(
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               // ── top bar ──
               Padding(
                 padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
@@ -196,7 +222,8 @@ class _UrgentWizardScreenState extends State<UrgentWizardScreen> {
                     onPressed: _canProceed ? _next : null,
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

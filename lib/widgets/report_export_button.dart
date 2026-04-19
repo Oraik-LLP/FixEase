@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 
+import '../config/app_config.dart';
 import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
+import '../services/diagnostic_service.dart';
 import '../services/report_export_service.dart';
+import '../services/subscription_service.dart';
 import '../theme/app_theme.dart';
 
 class ReportExportButton extends StatelessWidget {
@@ -22,7 +25,22 @@ class ReportExportButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => _showActions(context),
+      onTap: () async {
+        final reportCount = DiagnosticService.instance.reportCountForCurrentMonth();
+        final needsUpgrade =
+            reportCount > AppConfig.freePdfReportsPerMonth &&
+            !checkAccess(FeatureType.techPdfAfterTwoReports);
+        if (needsUpgrade) {
+          final unlocked = await ensureAccess(
+            context,
+            FeatureType.techPdfAfterTwoReports,
+            reason: 'Download Tech PDF',
+          );
+          if (!unlocked) return;
+        }
+        if (!context.mounted) return;
+        await _showActions(context);
+      },
       child: Container(
         width: 38,
         height: 38,

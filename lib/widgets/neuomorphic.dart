@@ -280,6 +280,10 @@ class NeuTextField extends StatelessWidget {
     this.controller,
     this.keyboardType,
     this.onChanged,
+    this.onTap,
+    this.onSubmitted,
+    this.readOnly = false,
+    this.enabled = true,
   });
 
   final String? hint;
@@ -289,6 +293,10 @@ class NeuTextField extends StatelessWidget {
   final TextEditingController? controller;
   final TextInputType? keyboardType;
   final ValueChanged<String>? onChanged;
+  final VoidCallback? onTap;
+  final ValueChanged<String>? onSubmitted;
+  final bool readOnly;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -304,9 +312,13 @@ class NeuTextField extends StatelessWidget {
         obscureText: obscure,
         keyboardType: keyboardType,
         onChanged: onChanged,
+        onTap: onTap,
+        onSubmitted: onSubmitted,
+        readOnly: readOnly,
+        enabled: enabled,
         style: GoogleFonts.inter(
           fontSize: 13,
-          color: AppColors.textPrimary,
+          color: enabled ? AppColors.textPrimary : AppColors.textTertiary,
           fontWeight: FontWeight.w400,
         ),
         decoration: InputDecoration(
@@ -514,7 +526,11 @@ class NeuSlider extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, box) {
         final trackW = box.maxWidth;
-        final thumbX = value.clamp(0.0, 1.0) * trackW;
+        const thumbSize = 14.0;
+        final clampedValue = value.clamp(0.0, 1.0);
+        final travelW = math.max(0.0, trackW - thumbSize);
+        final thumbLeft = clampedValue * travelW;
+        final fillWidth = (thumbLeft + (thumbSize / 2)).clamp(0.0, trackW);
         return GestureDetector(
           onHorizontalDragUpdate: onChanged == null
               ? null
@@ -539,17 +555,17 @@ class NeuSlider extends StatelessWidget {
                 ),
                 Container(
                   height: height,
-                  width: thumbX,
+                  width: fillWidth,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(height / 2),
                     color: AppColors.accent,
                   ),
                 ),
                 Positioned(
-                  left: (thumbX - 7).clamp(0, trackW - 14),
+                  left: thumbLeft,
                   child: Container(
-                    width: 14,
-                    height: 14,
+                    width: thumbSize,
+                    height: thumbSize,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: AppColors.accent,

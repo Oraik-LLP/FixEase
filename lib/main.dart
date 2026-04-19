@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import 'config/supabase_config.dart';
+import 'config/app_config.dart';
 import 'models/ai_response.dart';
 import 'models/diagnostic.dart';
 import 'models/vehicle.dart';
-import 'screens/auth/auth_screen.dart';
 import 'screens/conversations/conversation_chat_screen.dart';
 import 'screens/diagnose/live_diagnose_screen.dart';
 import 'screens/diagnose/photo_diagnose_screen.dart';
@@ -16,7 +16,6 @@ import 'screens/reports/report_detail_screen.dart';
 import 'screens/subscription/paywall_screen.dart';
 import 'screens/vehicle/add_vehicle_screen.dart';
 import 'screens/vehicle/my_vehicles_screen.dart';
-import 'services/auth_service.dart';
 import 'services/car_image_service.dart';
 import 'services/conversation_service.dart';
 import 'services/diagnostic_service.dart';
@@ -26,16 +25,11 @@ import 'services/reminder_scheduler_service.dart';
 import 'services/subscription_service.dart';
 import 'services/vehicle_service.dart';
 import 'theme/app_theme.dart';
-import 'widgets/fixease_drawer.dart';
 import 'widgets/neuomorphic.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocalStoreService.init();
-  try {
-    await SupabaseConfig.init();
-    AuthService.instance.init();
-  } catch (_) {}
   try { await VehicleService.instance.load(); } catch (_) {}
   try { await DiagnosticService.instance.load(); } catch (_) {}
   try { await ConversationService.instance.load(); } catch (_) {}
@@ -102,7 +96,7 @@ class _SplashScreenState extends State<SplashScreen>
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         PageRouteBuilder<void>(
-          pageBuilder: (_, __, ___) => const AuthGate(),
+          pageBuilder: (_, __, ___) => const AppShell(),
           transitionsBuilder: (_, animation, __, child) =>
               FadeTransition(opacity: animation, child: child),
         ),
@@ -170,29 +164,6 @@ class _SplashScreenState extends State<SplashScreen>
 // Auth gate — decides whether to show auth or main shell
 // ═══════════════════════════════════════════════════════════════════════════
 
-class AuthGate extends StatelessWidget {
-  const AuthGate({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: AuthService.instance,
-      builder: (context, _) {
-        if (AuthService.instance.isSignedIn || !SupabaseConfig.isConfigured) {
-          return const AppShell();
-        }
-        return AuthScreen(
-          onComplete: () {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute<void>(builder: (_) => const AppShell()),
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // App Shell — bottom nav + drawer
 // ═══════════════════════════════════════════════════════════════════════════
@@ -205,10 +176,12 @@ class AppShell extends StatefulWidget {
 }
 
 class AppShellState extends State<AppShell> {
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _index = 0;
 
-  void switchTab(int index) => setState(() => _index = index);
+  void switchTab(int index) {
+    setState(() => _index = index);
+    _refreshFreeCredits();
+  }
 
   static const List<String> _titles = [
     'FixEase',
@@ -218,69 +191,83 @@ class AppShellState extends State<AppShell> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+    _refreshFreeCredits();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
+    super.dispose();
+  }
+
+  late final WidgetsBindingObserver _lifecycleObserver =
+      _AppShellLifecycleObserver(onResume: _refreshFreeCredits);
+
+  Future<void> _refreshFreeCredits() async {
+    try {
+      await SubscriptionService.instance.refreshMonthlyCreditsForDisplay();
+    } catch (_) {}
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: Colors.transparent,
-      drawer: FixEaseDrawer(
-        currentIndex: _index,
-        onSelectTab: (i) {
-          setState(() => _index = i);
-          Navigator.of(context).pop();
-        },
-      ),
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.menu_rounded),
-          tooltip: 'Menu',
-          onPressed: () {
-            HapticFeedback.lightImpact();
-            _scaffoldKey.currentState?.openDrawer();
-          },
-        ),
-        title: Text(_titles[_index]),
-        actions: [
-          if (_index == 0)
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              tooltip: 'Settings',
-              onPressed: () => HapticFeedback.selectionClick(),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.person_outline_rounded),
-              tooltip: 'Account',
-              onPressed: () => HapticFeedback.selectionClick(),
-            ),
-        ],
-      ),
-      body: AppBackground(
-        child: IndexedStack(
-          index: _index,
-          children: const [
-            HomeTabBody(),
-            DiagnoseTabBody(),
-            GarageTabBody(),
-            ProfileTabBody(),
+    return PopScope(
+      canPop: _index == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || _index == 0) return;
+        switchTab(0);
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: Text(_titles[_index]),
+          actions: [
+            if (_index != 3)
+              IconButton(
+                icon: const Icon(Icons.person_outline_rounded),
+                tooltip: 'Profile',
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  switchTab(3);
+                },
+              ),
           ],
         ),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (value) {
-          HapticFeedback.selectionClick();
-          setState(() => _index = value);
-        },
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.home_rounded), label: 'Home'),
-          NavigationDestination(
-              icon: Icon(Icons.support_rounded), label: 'Diagnose'),
-          NavigationDestination(
-              icon: Icon(Icons.garage_rounded), label: 'Garage'),
-          NavigationDestination(
-              icon: Icon(Icons.person_rounded), label: 'Profile'),
-        ],
+        body: AppBackground(
+          child: IndexedStack(
+            index: _index,
+            children: const [
+              HomeTabBody(),
+              DiagnoseTabBody(),
+              GarageTabBody(),
+              ProfileTabBody(),
+            ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: (value) {
+              HapticFeedback.selectionClick();
+              switchTab(value);
+            },
+            destinations: const [
+              NavigationDestination(
+                  icon: Icon(Icons.home_rounded), label: 'Home'),
+              NavigationDestination(
+                  icon: Icon(Icons.support_rounded), label: 'Diagnose'),
+              NavigationDestination(
+                  icon: Icon(Icons.garage_rounded), label: 'Garage'),
+              NavigationDestination(
+                  icon: Icon(Icons.person_rounded), label: 'Profile'),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -289,6 +276,19 @@ class AppShellState extends State<AppShell> {
 // ═══════════════════════════════════════════════════════════════════════════
 // Home Tab
 // ═══════════════════════════════════════════════════════════════════════════
+
+class _AppShellLifecycleObserver with WidgetsBindingObserver {
+  _AppShellLifecycleObserver({required this.onResume});
+
+  final VoidCallback onResume;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onResume();
+    }
+  }
+}
 
 class HomeTabBody extends StatefulWidget {
   const HomeTabBody({super.key});
@@ -308,7 +308,7 @@ class _HomeTabBodyState extends State<HomeTabBody> {
         final vehicle = VehicleService.instance.selected;
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -509,10 +509,15 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   final resp = hasAi
                       ? AiDiagnosticResponse.fromJson(latest!.aiResponseJson!)
                       : null;
-                  final scoreLabel = resp?.displayScoreLabel ??
-                      (latest?.healthScore?.toStringAsFixed(1) ?? '—');
-                  final scorePct = resp?.displayProgress ??
-                      (((latest?.healthScore ?? 0.0) / 10).clamp(0.0, 1.0));
+                  final hasRespScore = resp?.hasDisplayableScore ?? false;
+                  final scoreLabel = hasRespScore
+                      ? resp!.displayScoreLabel
+                      : resp == null
+                          ? (latest?.healthScore?.toStringAsFixed(1) ?? '—')
+                          : '—';
+                  final scorePct = hasRespScore
+                      ? resp!.displayProgress
+                      : (((latest?.healthScore ?? 0.0) / 10).clamp(0.0, 1.0));
                   final subScores = resp?.normalizedSubScores ?? const <String, double>{};
 
                   return NeuPane(
@@ -522,21 +527,19 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                         Text('Vehicle Health', style: tt.titleLarge),
                         const SizedBox(height: 16),
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             NeuProgressRing(
                               progress: scorePct,
                               size: 90,
                               label: scoreLabel,
                             ),
-                            if (subScores.isNotEmpty)
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.only(left: 16),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: subScores.entries
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: subScores.isNotEmpty
+                                    ? subScores.entries
                                         .take(3)
                                         .map((e) => Padding(
                                               padding: const EdgeInsets.only(
@@ -545,42 +548,43 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
                                                 children: [
-                                                  Text(e.key,
-                                                      style: tt.bodySmall),
+                                                  Text(
+                                                    e.key,
+                                                    style: tt.bodySmall,
+                                                  ),
                                                   const SizedBox(height: 3),
                                                   SizedBox(
-                                                    width: 140,
+                                                    width: double.infinity,
                                                     child: NeuSlider(
-                                                      value: resp?.usesHundredPointScale == true
-                                                          ? (e.value / 100).clamp(0.0, 1.0)
-                                                          : (e.value / 10).clamp(0.0, 1.0),
+                                                      value: resp?.usesHundredPointScale ==
+                                                              true
+                                                          ? (e.value / 100)
+                                                              .clamp(0.0, 1.0)
+                                                          : (e.value / 10)
+                                                              .clamp(0.0, 1.0),
                                                     ),
                                                   ),
                                                 ],
                                               ),
                                             ))
-                                        .toList(),
-                                  ),
-                                ),
-                              )
-                            else
-                              Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                  Text('Engine', style: tt.bodyMedium),
-                                  const SizedBox(height: 4),
-                                  const SizedBox(
-                                      width: 140,
-                                      child: NeuSlider(value: 0.0)),
-                                  const SizedBox(height: 10),
-                                  Text('Brakes', style: tt.bodyMedium),
-                                  const SizedBox(height: 4),
-                                  const SizedBox(
-                                      width: 140,
-                                      child: NeuSlider(value: 0.0)),
-                                ],
+                                        .toList()
+                                    : [
+                                        Text('Engine', style: tt.bodyMedium),
+                                        const SizedBox(height: 4),
+                                        const SizedBox(
+                                          width: double.infinity,
+                                          child: NeuSlider(value: 0.0),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Text('Brakes', style: tt.bodyMedium),
+                                        const SizedBox(height: 4),
+                                        const SizedBox(
+                                          width: double.infinity,
+                                          child: NeuSlider(value: 0.0),
+                                        ),
+                                      ],
                               ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 10),
@@ -604,6 +608,7 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                 listenable: Listenable.merge([
                   DiagnosticService.instance,
                   ConversationService.instance,
+                  SubscriptionService.instance,
                 ]),
                 builder: (context, _) {
                   final sessions = vehicle != null
@@ -625,16 +630,46 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                     s.aiResponseJson!,
                                   )
                                 : null;
-                            final scoreLabel = response?.displayScoreLabel ??
-                                s.healthScore?.toStringAsFixed(1);
-                            final scoreSuffix = response == null
-                                ? '/10'
-                                : response.usesHundredPointScale
-                                    ? ''
-                                    : '/10';
-                            return GestureDetector(
-                                onTap: () {
+                            final rawScore = s.healthScore;
+                            final hasDisplayableScore =
+                                response?.hasDisplayableScore ?? false;
+                            final scoreLabel = hasDisplayableScore
+                                ? response!.displayScoreLabel
+                                : response == null
+                                    ? (rawScore != null
+                                        ? (rawScore > 10
+                                            ? rawScore.round().toString()
+                                            : rawScore.toStringAsFixed(1))
+                                        : null)
+                                    : null;
+                            final scoreSuffix = hasDisplayableScore
+                                ? (response!.usesHundredPointScale ? '' : '/10')
+                                : (rawScore != null && rawScore > 10 ? '' : '/10');
+                            final isLocked =
+                                DiagnosticService.instance
+                                    .isOlderThanMostRecentSessions(
+                                  s,
+                                  allowedCount: 2,
+                                ) &&
+                                !checkAccess(
+                                  FeatureType.olderHistoryAccess,
+                                  session: s,
+                                );
+                            return Opacity(
+                              opacity: isLocked ? 0.68 : 1,
+                              child: GestureDetector(
+                                onTap: () async {
                                   HapticFeedback.selectionClick();
+                                  if (isLocked) {
+                                    await ensureAccess(
+                                      context,
+                                      FeatureType.olderHistoryAccess,
+                                      session: s,
+                                      reason: 'Older Diagnostic History',
+                                    );
+                                    return;
+                                  }
+                                  if (!context.mounted) return;
                                   Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => s.type == DiagnosticType.live
@@ -683,14 +718,20 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                           ),
                                         ),
                                       const SizedBox(width: 6),
-                                      const Icon(
-                                          Icons.chevron_right_rounded,
-                                          size: 16,
-                                          color: AppColors.textTertiary),
+                                      Icon(
+                                        isLocked
+                                            ? Icons.lock_rounded
+                                            : Icons.chevron_right_rounded,
+                                        size: 16,
+                                        color: isLocked
+                                            ? AppColors.accent
+                                            : AppColors.textTertiary,
+                                      ),
                                     ],
                                   ),
                                 ),
-                              );
+                              ),
+                            );
                           }),
                       ],
                     ),
@@ -718,7 +759,6 @@ class _HomeTabBodyState extends State<HomeTabBody> {
       ));
       return;
     }
-    sub.recordDiagnosis();
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => screen,
     ));
@@ -978,7 +1018,6 @@ class DiagnoseTabBody extends StatelessWidget {
       ));
       return;
     }
-    sub.recordDiagnosis();
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => screen,
     ));
@@ -989,7 +1028,7 @@ class DiagnoseTabBody extends StatelessWidget {
     final tt = Theme.of(context).textTheme;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1063,18 +1102,6 @@ class DiagnoseTabBody extends StatelessWidget {
             accentColor: const Color(0xFF4CAF50),
             badge: 'BETA',
             onTap: () => launchLiveDiagnosis(context),
-          ),
-          const SizedBox(height: 14),
-          _DiagnoseOptionCard(
-            icon: Icons.garage_rounded,
-            title: 'Garage',
-            description:
-                'Set upcoming service reminders for oil, tires, and registration that stay local on your device.',
-            accentColor: const Color(0xFF42A5F5),
-            onTap: () {
-              final shell = context.findAncestorStateOfType<AppShellState>();
-              shell?.switchTab(2);
-            },
           ),
         ],
       ),
@@ -1188,6 +1215,7 @@ class ReportsTabBody extends StatelessWidget {
       listenable: Listenable.merge([
         DiagnosticService.instance,
         ConversationService.instance,
+        SubscriptionService.instance,
       ]),
       builder: (context, _) {
         final all = DiagnosticService.instance.sessions;
@@ -1234,7 +1262,7 @@ class _ReportListCard extends StatelessWidget {
     if (session.type == DiagnosticType.live) {
       return const Color(0xFF4CAF50);
     }
-    if (response != null) {
+    if (response != null && response.hasDisplayableScore) {
       return response.statusColor;
     }
     final sc = session.healthScore ?? 0;
@@ -1275,6 +1303,15 @@ class _ReportListCard extends StatelessWidget {
             : isLive
                 ? 'Gemini Live'
                 : 'Photo Diagnosis';
+    final isLocked =
+        DiagnosticService.instance.isOlderThanMostRecentSessions(
+          session,
+          allowedCount: 2,
+        ) &&
+        !checkAccess(
+          FeatureType.olderHistoryAccess,
+          session: session,
+        );
 
     return Dismissible(
       key: ValueKey(session.id),
@@ -1317,9 +1354,21 @@ class _ReportListCard extends StatelessWidget {
       },
       onDismissed: (_) =>
           DiagnosticService.instance.delete(session.id),
-      child: GestureDetector(
-        onTap: () {
+      child: Opacity(
+        opacity: isLocked ? 0.68 : 1,
+        child: GestureDetector(
+        onTap: () async {
           HapticFeedback.selectionClick();
+          if (isLocked) {
+            await ensureAccess(
+              context,
+              FeatureType.olderHistoryAccess,
+              session: session,
+              reason: 'Older Diagnostic History',
+            );
+            return;
+          }
+          if (!context.mounted) return;
           Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => isLive
                 ? ConversationChatScreen(session: session)
@@ -1440,11 +1489,15 @@ class _ReportListCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              const Icon(Icons.chevron_right_rounded,
-                  size: 18, color: AppColors.textTertiary),
+              Icon(
+                isLocked ? Icons.lock_rounded : Icons.chevron_right_rounded,
+                size: 18,
+                color: isLocked ? AppColors.accent : AppColors.textTertiary,
+              ),
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -1457,56 +1510,73 @@ class _ReportListCard extends StatelessWidget {
 class ProfileTabBody extends StatelessWidget {
   const ProfileTabBody({super.key});
 
+  Future<void> _openSupport() async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: AppConfig.supportEmail,
+      queryParameters: const {
+        'subject': 'FixEase Help and Support',
+      },
+    );
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _openAbout() async {
+    final launched = await launchUrl(
+      Uri.parse(AppConfig.aboutUrl),
+      mode: LaunchMode.inAppBrowserView,
+    );
+    if (!launched) {
+      await launchUrl(
+        Uri.parse(AppConfig.aboutUrl),
+        mode: LaunchMode.externalApplication,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
         children: [
-          ListenableBuilder(
-            listenable: AuthService.instance,
-            builder: (context, _) {
-              return NeuPane(
-                child: Row(
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.accent.withValues(alpha: 0.15),
-                      ),
-                      child: Center(
-                        child: Text(
-                          AuthService.instance.displayName[0].toUpperCase(),
-                          style: tt.headlineMedium
-                              ?.copyWith(color: AppColors.accent),
-                        ),
+          NeuPane(
+            child: Row(
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.accent.withValues(alpha: 0.15),
+                  ),
+                  child: Center(
+                    child: Text(
+                      'F',
+                      style: tt.headlineMedium?.copyWith(
+                        color: AppColors.accent,
                       ),
                     ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(AuthService.instance.displayName,
-                              style: tt.titleLarge),
-                          const SizedBox(height: 2),
-                          Text(
-                            AuthService.instance.isSignedIn
-                                ? AuthService.instance.user?.email ?? ''
-                                : 'Guest mode',
-                            style: tt.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              );
-            },
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('FixEase Driver', style: tt.titleLarge),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Guest mode · all core data stays on this device',
+                        style: tt.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 14),
 
@@ -1516,6 +1586,15 @@ class ProfileTabBody extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                   builder: (_) => const MyVehiclesScreen()),
+            ),
+          ),
+          _ProfileMenuItem(
+            icon: Icons.add_circle_outline_rounded,
+            label: 'Add Vehicle',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AddVehicleScreen(),
+              ),
             ),
           ),
           _ProfileMenuItem(
@@ -1541,33 +1620,37 @@ class ProfileTabBody extends StatelessWidget {
               ),
             ),
           ),
+          if (AppConfig.isDemoMode)
+            _ProfileMenuItem(
+              icon: Icons.restart_alt_rounded,
+              label: 'Reset Free Credits',
+              subtitle: 'Restore the free 3-diagnosis allowance',
+              onTap: () async {
+                await SubscriptionService.instance.resetFreeCreditsForTesting();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Free credits reset for testing'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+            ),
           _ProfileMenuItem(
             icon: Icons.help_outline_rounded,
             label: 'Help & Support',
-            onTap: () {},
+            onTap: () {
+              _openSupport();
+            },
           ),
           _ProfileMenuItem(
             icon: Icons.info_outline_rounded,
             label: 'About FixEase',
             subtitle: 'v1.0.0',
-            onTap: () {},
+            onTap: () {
+              _openAbout();
+            },
           ),
-          const SizedBox(height: 14),
-
-          if (AuthService.instance.isSignedIn)
-            NeuSecondaryButton(
-              label: 'Sign Out',
-              icon: Icons.logout_rounded,
-              onPressed: () async {
-                await AuthService.instance.signOut();
-                if (!context.mounted) return;
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute<void>(
-                      builder: (_) => const AuthGate()),
-                  (_) => false,
-                );
-              },
-            ),
         ],
       ),
     );
@@ -1623,3 +1706,5 @@ class _ProfileMenuItem extends StatelessWidget {
     );
   }
 }
+
+

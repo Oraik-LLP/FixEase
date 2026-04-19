@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
@@ -15,6 +17,7 @@ import '../models/vehicle.dart';
 class AiService {
   AiService._();
   static final instance = AiService._();
+  static const _retryDelay = Duration(seconds: 5);
 
   Future<AiDiagnosticResponse> analyzeSymptoms({
     required Vehicle vehicle,
@@ -31,7 +34,7 @@ class AiService {
     }
 
     try {
-      final payload = await _postJson(
+      final payload = await _postJsonWithRetry(
         '/api/diagnose/symptoms',
         {
           'vehicle': _vehiclePayload(vehicle),
@@ -65,7 +68,7 @@ class AiService {
     }
 
     try {
-      final payload = await _postJson(
+      final payload = await _postJsonWithRetry(
         '/api/diagnose/photos',
         {
           'vehicle': _vehiclePayload(vehicle),
@@ -95,7 +98,7 @@ class AiService {
     }
 
     try {
-      final payload = await _postJson(
+      final payload = await _postJsonWithRetry(
         '/api/diagnose/invoice-audit',
         {
           'vehicle': _vehiclePayload(vehicle),
@@ -163,7 +166,7 @@ class AiService {
         }
       }
 
-      final payload = await _postJson('/api/conversations/respond', body);
+      final payload = await _postJsonWithRetry('/api/conversations/respond', body);
       return ConversationAiResponse.fromJson(payload);
     } catch (e) {
       return ConversationAiResponse(
@@ -178,14 +181,42 @@ class AiService {
   Future<List<Map<String, dynamic>>> _encodeFiles(List<File> files) async {
     final encoded = <Map<String, dynamic>>[];
     for (final file in files) {
-      final bytes = await file.readAsBytes();
+      final bytes = await _readPayloadBytes(file);
+      final encodedAsJpeg = _isCompressibleImage(file.path);
       encoded.add({
-        'name': p.basename(file.path),
-        'mime_type': _mimeTypeForPath(file.path),
+        'name': encodedAsJpeg
+            ? p.setExtension(p.basename(file.path), '.jpg')
+            : p.basename(file.path),
+        'mime_type': encodedAsJpeg ? 'image/jpeg' : _mimeTypeForPath(file.path),
         'data': base64Encode(bytes),
       });
     }
     return encoded;
+  }
+
+  Future<Uint8List> _readPayloadBytes(File file) async {
+    if (_isCompressibleImage(file.path)) {
+      final compressed = await FlutterImageCompress.compressWithFile(
+        file.absolute.path,
+        minWidth: 1920,
+        minHeight: 1080,
+        quality: 85,
+        format: CompressFormat.jpeg,
+      );
+      if (compressed != null && compressed.isNotEmpty) {
+        return compressed;
+      }
+    }
+    return await file.readAsBytes();
+  }
+
+  bool _isCompressibleImage(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.heic');
   }
 
   String _mimeTypeForPath(String path) {
@@ -220,6 +251,18 @@ class AiService {
     final message = payload['message'] as String? ?? 'AI request failed';
     final code = payload['error_code'] as String? ?? 'request_failed';
     throw AiRequestException(code, message);
+  }
+
+  Future<Map<String, dynamic>> _postJsonWithRetry(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    try {
+      return await _postJson(path, body);
+    } catch (_) {
+      await Future<void>.delayed(_retryDelay);
+      return _postJson(path, body);
+    }
   }
 
   Map<String, dynamic> _vehiclePayload(Vehicle vehicle) => {

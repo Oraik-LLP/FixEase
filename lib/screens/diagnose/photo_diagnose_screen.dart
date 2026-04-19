@@ -10,7 +10,9 @@ import '../conversations/conversation_chat_screen.dart';
 import 'invoice_audit_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
+import '../../services/review_prompt_service.dart';
 import '../../services/storage_service.dart';
+import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/ai_loading_view.dart';
@@ -64,7 +66,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
       maxWidth: 1920,
     );
     if (xfile != null) {
-      setState(() => _images.add(File(xfile.path)));
+      _addImages([File(xfile.path)]);
     }
   }
 
@@ -74,10 +76,36 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
       maxWidth: 1920,
     );
     if (xfiles.isNotEmpty) {
+      _addImages(xfiles.map((x) => File(x.path)).toList());
+    }
+  }
+
+  void _addImages(List<File> files) {
+    final remainingSlots = 8 - _images.length;
+    if (remainingSlots <= 0) {
+      _showImageCapMessage();
+      return;
+    }
+
+    final accepted = files.take(remainingSlots).toList();
+    if (accepted.isNotEmpty) {
       setState(() {
-        _images.addAll(xfiles.map((x) => File(x.path)));
+        _images.addAll(accepted);
       });
     }
+    if (accepted.length < files.length) {
+      _showImageCapMessage();
+    }
+  }
+
+  void _showImageCapMessage() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('You can upload up to 8 photos per report.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _removeImage(int index) {
@@ -119,12 +147,22 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
         vehicleName: vehicle.displayName,
       );
       await DiagnosticService.instance.save(session);
+      if (!response.isFallback) {
+        await SubscriptionService.instance.recordDiagnosis();
+      }
 
       if (!mounted) return;
       setState(() {
         _result = response;
         _session = session;
         _step = 3;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ReviewPromptService.instance.maybePrompt(
+          context,
+          trigger: ReviewPromptTrigger.diagnosisSuccess,
+        );
       });
     } catch (e) {
       if (!mounted) return;
@@ -149,12 +187,22 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
 
-    return Scaffold(
-      body: AppBackground(
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_step == 2) {
+          Navigator.of(context).pop();
+          return;
+        }
+        _back();
+      },
+      child: Scaffold(
+        body: AppBackground(
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               // ── top bar ──
               Padding(
                 padding: const EdgeInsets.fromLTRB(4, 4, 16, 0),
@@ -207,7 +255,8 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
                     onPressed: _canProceed ? _next : null,
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -239,8 +288,14 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
           Align(
             alignment: Alignment.centerLeft,
             child: GestureDetector(
-              onTap: () {
+              onTap: () async {
                 HapticFeedback.selectionClick();
+                final unlocked = await ensureAccess(
+                  context,
+                  FeatureType.invoiceAudit,
+                  reason: 'Invoice Audit',
+                );
+                if (!unlocked || !mounted) return;
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const InvoiceAuditScreen(),

@@ -3,11 +3,12 @@ import 'package:flutter/services.dart';
 
 import '../../models/ai_response.dart';
 import '../../models/diagnostic.dart';
-import '../conversations/conversation_chat_screen.dart';
 import '../../services/conversation_service.dart';
 import '../../services/diagnostic_service.dart';
+import '../../services/subscription_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/neuomorphic.dart';
+import '../conversations/conversation_chat_screen.dart';
 import 'report_detail_screen.dart';
 
 class DiagnosticHistoryScreen extends StatelessWidget {
@@ -30,7 +31,43 @@ class DiagnosticHistoryScreen extends StatelessWidget {
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                     const SizedBox(width: 8),
-                    Text('Diagnostic History', style: tt.titleLarge),
+                    Expanded(
+                      child: Text('Diagnostic History', style: tt.titleLarge),
+                    ),
+                    ListenableBuilder(
+                      listenable: DiagnosticService.instance,
+                      builder: (_, __) {
+                        final hasReports =
+                            DiagnosticService.instance.sessions.isNotEmpty;
+                        return IconButton(
+                          tooltip: 'Delete all reports',
+                          onPressed: hasReports
+                              ? () async {
+                                  HapticFeedback.mediumImpact();
+                                  final confirmed =
+                                      await _confirmDeleteAll(context);
+                                  if (confirmed != true || !context.mounted) {
+                                    return;
+                                  }
+                                  await DiagnosticService.instance.deleteAll();
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('All reports deleted'),
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                }
+                              : null,
+                          icon: Icon(
+                            Icons.delete_sweep_rounded,
+                            color: hasReports
+                                ? const Color(0xFFFF7043)
+                                : AppColors.textTertiary,
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -38,6 +75,40 @@ class DiagnosticHistoryScreen extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<bool?> _confirmDeleteAll(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: Text('Delete All Reports', style: tt.titleLarge),
+        content: Text(
+          'This will permanently delete every saved diagnostic report and its conversation history.',
+          style: tt.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Delete All',
+              style: TextStyle(color: Color(0xFFFF5252)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -54,6 +125,7 @@ class DiagnosticHistoryList extends StatelessWidget {
       listenable: Listenable.merge([
         DiagnosticService.instance,
         ConversationService.instance,
+        SubscriptionService.instance,
       ]),
       builder: (context, _) {
         final all = DiagnosticService.instance.sessions;
@@ -150,12 +222,21 @@ class _HistoryListCard extends StatelessWidget {
             : isLive
                 ? 'Gemini Live'
                 : 'Photo Diagnosis';
+    final isLocked =
+        DiagnosticService.instance.isOlderThanMostRecentSessions(
+          session,
+          allowedCount: 2,
+        ) &&
+        !checkAccess(
+          FeatureType.olderHistoryAccess,
+          session: session,
+        );
     final ringProgress = response != null
         ? response.displayProgress
         : ((session.healthScore ?? 0) / 100).clamp(0.0, 1.0);
     final ringLabel = response != null
         ? response.displayScoreLabel
-        : session.healthScore?.round().toString() ?? '—';
+        : session.healthScore?.round().toString() ?? '-';
 
     return Dismissible(
       key: ValueKey(session.id),
@@ -172,167 +253,201 @@ class _HistoryListCard extends StatelessWidget {
           color: Color(0xFFFF5252),
         ),
       ),
-      confirmDismiss: (_) async {
-        HapticFeedback.mediumImpact();
-        return await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                title: Text('Delete Report', style: tt.titleLarge),
-                content: Text(
-                  'This report will be permanently deleted.',
-                  style: tt.bodyMedium,
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: Text(
-                      'Cancel',
-                      style: TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text(
-                      'Delete',
-                      style: TextStyle(color: Color(0xFFFF5252)),
-                    ),
-                  ),
-                ],
-              ),
-            ) ??
-            false;
-      },
+      confirmDismiss: (_) => _confirmDeleteOne(context),
       onDismissed: (_) => DiagnosticService.instance.delete(session.id),
-      child: GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => isLive
-                  ? ConversationChatScreen(session: session)
-                  : ReportDetailScreen(session: session),
-            ),
-          );
-        },
-        child: NeuPane(
-          child: Row(
-            children: [
-              SizedBox(
-                width: 52,
-                height: 52,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    SizedBox(
-                      width: 52,
-                      height: 52,
-                      child: CircularProgressIndicator(
-                        value: ringProgress,
-                        strokeWidth: 3,
-                        backgroundColor: AppColors.surfaceHighlight,
-                        color: _scoreColor,
-                      ),
-                    ),
-                    Text(
-                      ringLabel,
-                      style: tt.bodySmall?.copyWith(
-                        color: _scoreColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
+      child: Opacity(
+        opacity: isLocked ? 0.68 : 1,
+        child: GestureDetector(
+          onTap: () async {
+            HapticFeedback.selectionClick();
+            if (isLocked) {
+              await ensureAccess(
+                context,
+                FeatureType.olderHistoryAccess,
+                session: session,
+                reason: 'Older Diagnostic History',
+              );
+              return;
+            }
+            if (!context.mounted) return;
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => isLive
+                    ? ConversationChatScreen(session: session)
+                    : ReportDetailScreen(session: session),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(icon, size: 15, color: iconColor),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: tt.titleMedium,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+            );
+          },
+          child: NeuPane(
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: 52,
+                        height: 52,
+                        child: CircularProgressIndicator(
+                          value: ringProgress,
+                          strokeWidth: 3,
+                          backgroundColor: AppColors.surfaceHighlight,
+                          color: _scoreColor,
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    if (session.vehicleName != null)
-                      Text(
-                        session.vehicleName!,
-                        style: tt.bodySmall?.copyWith(
-                          color: AppColors.accent,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text(session.dateLabel, style: tt.bodySmall),
-                        const SizedBox(width: 8),
-                        Text(
-                          session.timeLabel,
-                          style: tt.bodySmall?.copyWith(
-                            color: AppColors.textTertiary,
-                          ),
+                      Text(
+                        ringLabel,
+                        style: tt.bodySmall?.copyWith(
+                          color: _scoreColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
                         ),
-                        const Spacer(),
-                        if (isLive)
-                          Flexible(
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(icon, size: 15, color: iconColor),
+                          const SizedBox(width: 6),
+                          Expanded(
                             child: Text(
-                              thread?.previewText ?? 'Saved conversation',
+                              title,
+                              style: tt.titleMedium,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      if (session.vehicleName != null)
+                        Text(
+                          session.vehicleName!,
+                          style: tt.bodySmall?.copyWith(
+                            color: AppColors.accent,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Text(session.dateLabel, style: tt.bodySmall),
+                          const SizedBox(width: 8),
+                          Text(
+                            session.timeLabel,
+                            style: tt.bodySmall?.copyWith(
+                              color: AppColors.textTertiary,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (isLive)
+                            Flexible(
+                              child: Text(
+                                thread?.previewText ?? 'Saved conversation',
+                                style: tt.bodySmall?.copyWith(
+                                  color: AppColors.textTertiary,
+                                  fontSize: 10,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.end,
+                              ),
+                            )
+                          else if (session.type == DiagnosticType.invoiceAudit)
+                            Text(
+                              session.aiResponseJson?['document_type'] as String? ??
+                                  'Bill review',
                               style: tt.bodySmall?.copyWith(
                                 color: AppColors.textTertiary,
                                 fontSize: 10,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
+                            )
+                          else if (session.symptoms.isNotEmpty)
+                            Text(
+                              '${session.symptoms.length} symptom(s)',
+                              style: tt.bodySmall?.copyWith(
+                                color: AppColors.textTertiary,
+                                fontSize: 10,
+                              ),
                             ),
-                          )
-                        else if (session.type == DiagnosticType.invoiceAudit)
-                          Text(
-                            session.aiResponseJson?['document_type'] as String? ??
-                                'Bill review',
-                            style: tt.bodySmall?.copyWith(
-                              color: AppColors.textTertiary,
-                              fontSize: 10,
-                            ),
-                          )
-                        else if (session.symptoms.isNotEmpty)
-                          Text(
-                            '${session.symptoms.length} symptom(s)',
-                            style: tt.bodySmall?.copyWith(
-                              color: AppColors.textTertiary,
-                              fontSize: 10,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              const Icon(
-                Icons.chevron_right_rounded,
-                size: 18,
-                color: AppColors.textTertiary,
-              ),
-            ],
+                IconButton(
+                  tooltip: 'Delete report',
+                  onPressed: () async {
+                    HapticFeedback.mediumImpact();
+                    final confirmed = await _confirmDeleteOne(context);
+                    if (confirmed != true) return;
+                    await DiagnosticService.instance.delete(session.id);
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Report deleted'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 18,
+                    color: Color(0xFFFF7043),
+                  ),
+                ),
+                Icon(
+                  isLocked ? Icons.lock_rounded : Icons.chevron_right_rounded,
+                  size: 18,
+                  color: isLocked ? AppColors.accent : AppColors.textTertiary,
+                ),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Future<bool?> _confirmDeleteOne(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: Text('Delete Report', style: tt.titleLarge),
+        content: Text(
+          'This report will be permanently deleted.',
+          style: tt.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Color(0xFFFF5252)),
+            ),
+          ),
+        ],
       ),
     );
   }

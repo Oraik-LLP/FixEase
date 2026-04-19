@@ -94,11 +94,19 @@ class _GarageTabBodyState extends State<GarageTabBody> {
     required Vehicle vehicle,
     required GarageProfile profile,
   }) async {
-    await _showReminderPermissionSheet(
+    final message = await _showReminderPermissionSheet(
       vehicle: vehicle,
       profile: profile,
       markPromptHandled: false,
     );
+    if (mounted && message != null && message.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
     if (mounted) {
       setState(() {});
     }
@@ -141,90 +149,86 @@ class _GarageTabBodyState extends State<GarageTabBody> {
     });
   }
 
-  Future<void> _showReminderPermissionSheet({
+  Future<String?> _showReminderPermissionSheet({
     required Vehicle vehicle,
     required GarageProfile profile,
     required bool markPromptHandled,
   }) async {
     final tt = Theme.of(context).textTheme;
-    final messenger = ScaffoldMessenger.of(context);
-    await showModalBottomSheet<void>(
+    final result = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
         return Padding(
           padding: const EdgeInsets.all(20),
-          child: NeuPane(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Turn On Local Reminders?', style: tt.titleLarge),
-                const SizedBox(height: 8),
-                Text(
-                  'FixEase can remind you about oil, tire, and registration dates right on this phone. Nothing is sent to a server, and you can turn this on later from Garage too.',
-                  style: tt.bodyMedium,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: NeuSecondaryButton(
-                        label: 'Not Now',
-                        onPressed: () async {
-                          if (markPromptHandled) {
-                            await GarageService.instance
-                                .markReminderPromptHandled(vehicle.id);
-                          }
-                          if (!sheetContext.mounted) return;
-                          Navigator.of(sheetContext).pop();
-                        },
+          child: SafeArea(
+            top: false,
+            child: NeuPane(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Turn On Local Reminders?', style: tt.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(
+                    'FixEase can remind you about oil, tire, and registration dates right on this phone. Nothing is sent to a server, and you can turn this on later from Garage too.',
+                    style: tt.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: NeuSecondaryButton(
+                          label: 'Not Now',
+                          onPressed: () async {
+                            if (markPromptHandled) {
+                              await GarageService.instance
+                                  .markReminderPromptHandled(vehicle.id);
+                            }
+                            if (!sheetContext.mounted) return;
+                            Navigator.of(sheetContext).pop();
+                          },
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: NeuPrimaryButton(
-                        label: 'Enable',
-                        icon: Icons.notifications_active_rounded,
-                        onPressed: () async {
-                          if (_syncingReminders) return;
-                          setState(() => _syncingReminders = true);
-                          final granted = await ReminderSchedulerService
-                              .instance
-                              .requestReminderPermissions();
-                          if (granted) {
-                            await ReminderSchedulerService.instance
-                                .syncVehicleReminders(
-                              profile: profile,
-                              vehicle: vehicle,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: NeuPrimaryButton(
+                          label: 'Enable',
+                          icon: Icons.notifications_active_rounded,
+                          onPressed: () async {
+                            if (_syncingReminders) return;
+                            setState(() => _syncingReminders = true);
+                            final granted = await ReminderSchedulerService
+                                .instance
+                                .requestReminderPermissions();
+                            if (granted) {
+                              await ReminderSchedulerService.instance
+                                  .syncVehicleReminders(
+                                profile: profile,
+                                vehicle: vehicle,
+                              );
+                            }
+                            if (!sheetContext.mounted) return;
+                            if (markPromptHandled) {
+                              await GarageService.instance
+                                  .markReminderPromptHandled(vehicle.id);
+                            }
+                            if (!sheetContext.mounted) return;
+                            Navigator.of(sheetContext).pop(
+                              granted
+                                  ? 'Local reminders are now enabled for ${vehicle.displayName}.'
+                                  : 'Reminders stayed off. You can enable them later from Garage.',
                             );
-                          }
-                          if (!sheetContext.mounted) return;
-                          if (markPromptHandled) {
-                            await GarageService.instance
-                                .markReminderPromptHandled(vehicle.id);
-                          }
-                          if (!sheetContext.mounted) return;
-                          Navigator.of(sheetContext).pop();
-                          if (mounted) {
-                            setState(() => _syncingReminders = false);
-                            messenger.showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  granted
-                                      ? 'Local reminders are now enabled for ${vehicle.displayName}.'
-                                      : 'Reminders stayed off. You can enable them later from Garage.',
-                                ),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        },
+                            if (mounted) {
+                              setState(() => _syncingReminders = false);
+                            }
+                          },
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -233,6 +237,7 @@ class _GarageTabBodyState extends State<GarageTabBody> {
     if (markPromptHandled) {
       await GarageService.instance.markReminderPromptHandled(vehicle.id);
     }
+    return result;
   }
 
   Future<void> _markOilServiceDone({
@@ -303,7 +308,7 @@ class _GarageDashboard extends StatelessWidget {
     final registrationState = _GarageDueState.forRegistration(profile);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
