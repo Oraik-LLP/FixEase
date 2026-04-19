@@ -23,6 +23,7 @@ enum FeatureType {
   techPdfAfterTwoReports,
   olderHistoryAccess,
   extendedLiveAudio,
+  obdProSuite,
   standardFollowUpMessage,
   standardFollowUpMedia,
   liveTextMessage,
@@ -487,6 +488,8 @@ class SubscriptionService extends ChangeNotifier {
         );
       case FeatureType.extendedLiveAudio:
         return hasPremiumAccess;
+      case FeatureType.obdProSuite:
+        return hasPremiumAccess;
       case FeatureType.standardFollowUpMessage:
         if (resolvedSessionId == null || resolvedThreadType == null) {
           return false;
@@ -634,6 +637,7 @@ class SubscriptionService extends ChangeNotifier {
             'Unlimited report exports for 48 hours',
             'Extended live audio for 48 hours',
             'Unlock older diagnostic history',
+            'OBD Pro Diagnostic Suite',
           ],
         ),
         SubscriptionProduct(
@@ -651,6 +655,7 @@ class SubscriptionService extends ChangeNotifier {
             'Unlimited tech PDF access',
             'Older history unlocked',
             '10-minute live audio',
+            'OBD Pro Diagnostic Suite',
             'Priority AI processing',
           ],
         ),
@@ -671,6 +676,7 @@ class SubscriptionService extends ChangeNotifier {
           'Unlimited report exports for 48 hours',
           'Extended live audio for 48 hours',
           'Unlock older diagnostic history',
+          'OBD Pro Diagnostic Suite',
         ],
         package: _findPackage(
           offering,
@@ -691,6 +697,7 @@ class SubscriptionService extends ChangeNotifier {
           'Unlimited tech PDF access',
           'Older history unlocked',
           '10-minute live audio',
+          'OBD Pro Diagnostic Suite',
           'Priority AI processing',
         ],
         package: _findPackage(
@@ -993,6 +1000,7 @@ class SubscriptionService extends ChangeNotifier {
         FeatureType.techPdfAfterTwoReports => 'Download Tech PDF',
         FeatureType.olderHistoryAccess => 'Older Diagnostic History',
         FeatureType.extendedLiveAudio => '10-minute Live Audio',
+        FeatureType.obdProSuite => 'OBD Pro Diagnostic Suite',
         FeatureType.standardFollowUpMessage => 'Continue Conversation',
         FeatureType.standardFollowUpMedia => 'Conversation Attachments',
         FeatureType.liveTextMessage => 'Continue Gemini Live',

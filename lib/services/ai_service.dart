@@ -11,6 +11,7 @@ import '../config/ai_config.dart';
 import '../models/ai_response.dart';
 import '../models/conversation.dart';
 import '../models/diagnostic.dart';
+import '../models/obd.dart';
 import '../models/vehicle.dart';
 import 'device_identity_service.dart';
 import 'subscription_service.dart';
@@ -53,6 +54,7 @@ class AiService {
     required Vehicle vehicle,
     required List<File> images,
     String? description,
+    Map<String, dynamic>? obdContext,
   }) async {
     if (!AiConfig.isConfigured || images.isEmpty) {
       throw Exception(
@@ -69,6 +71,7 @@ class AiService {
           'vehicle': _vehiclePayload(vehicle),
           'images': await _encodeFiles(images.take(8).toList()),
           'description': description,
+          if (obdContext != null) 'obd_context': obdContext,
         },
       );
       return AiDiagnosticResponse.fromJson(payload);
@@ -95,6 +98,36 @@ class AiService {
           'vehicle': _vehiclePayload(vehicle),
           'documents': await _encodeFiles([document]),
           'purpose': purpose,
+        },
+      );
+      return AiDiagnosticResponse.fromJson(payload);
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  Future<AiDiagnosticResponse> analyzeObdPro({
+    required Vehicle vehicle,
+    required ObdScanRecord record,
+  }) async {
+    if (!AiConfig.isConfigured) {
+      throw Exception(
+        'FixEase could not verify scan access because the backend is unavailable.',
+      );
+    }
+
+    try {
+      final payload = await _postJsonWithRetry(
+        '/api/diagnose/obd-pro',
+        {
+          'vehicle': _vehiclePayload(vehicle),
+          'mode': record.kind.name,
+          'is_partial': record.isPartial,
+          'completion_reason': record.completionReason.name,
+          'target_duration_seconds': record.targetDurationSeconds,
+          'captured_duration_seconds': record.capturedDurationSeconds,
+          'static_snapshot': record.staticSnapshot.toJson(),
+          'processed_scan': record.processedScan.toJson(),
         },
       );
       return AiDiagnosticResponse.fromJson(payload);

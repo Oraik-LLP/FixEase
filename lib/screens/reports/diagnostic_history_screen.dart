@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/ai_response.dart';
 import '../../models/diagnostic.dart';
+import '../../models/obd.dart';
 import '../../services/conversation_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../services/subscription_service.dart';
@@ -180,6 +181,17 @@ class _HistoryListCard extends StatelessWidget {
     }
   }
 
+  ObdScanRecord? get _obdRecord {
+    final context = session.contextJson;
+    final recordJson = context?['obd_record'];
+    if (recordJson is! Map) return null;
+    try {
+      return ObdScanRecord.fromJson(Map<String, dynamic>.from(recordJson));
+    } catch (_) {
+      return null;
+    }
+  }
+
   Color get _scoreColor {
     if (session.type == DiagnosticType.live) {
       return const Color(0xFF4CAF50);
@@ -200,6 +212,9 @@ class _HistoryListCard extends StatelessWidget {
     final isUrgent = session.type == DiagnosticType.urgent;
     final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
     final isLive = session.type == DiagnosticType.live;
+    final isObdIdle = session.type == DiagnosticType.obdIdle;
+    final isObdDrive = session.type == DiagnosticType.obdDrive;
+    final obdRecord = _obdRecord;
     final thread = ConversationService.instance.threadForSession(session.id);
     final icon = isUrgent
         ? Icons.warning_amber_rounded
@@ -207,21 +222,35 @@ class _HistoryListCard extends StatelessWidget {
             ? Icons.receipt_long_rounded
             : isLive
                 ? Icons.videocam_rounded
-                : Icons.camera_alt_outlined;
+                : isObdIdle
+                    ? Icons.nights_stay_rounded
+                    : isObdDrive
+                        ? Icons.route_rounded
+                        : Icons.camera_alt_outlined;
     final iconColor = isUrgent
         ? const Color(0xFFFF9800)
         : isInvoiceAudit
             ? const Color(0xFFFF7043)
             : isLive
                 ? const Color(0xFF4CAF50)
-                : AppColors.accent;
+                : isObdIdle || isObdDrive
+                    ? const Color(0xFF7DD3FC)
+                    : AppColors.accent;
     final title = isUrgent
         ? 'Urgent Diagnosis'
         : isInvoiceAudit
             ? 'Invoice Audit'
             : isLive
                 ? 'Gemini Live'
-                : 'Photo Diagnosis';
+                : isObdIdle
+                    ? (obdRecord?.isPartial == true
+                        ? 'Partial Idle Scan'
+                        : 'Idle Health Scan')
+                    : isObdDrive
+                        ? (obdRecord?.isPartial == true
+                            ? 'Partial Drive Scan'
+                            : 'Drive Load Scan')
+                        : 'Photo Diagnosis';
     final isLocked =
         DiagnosticService.instance.isOlderThanMostRecentSessions(
           session,
@@ -366,6 +395,16 @@ class _HistoryListCard extends StatelessWidget {
                             Text(
                               session.aiResponseJson?['document_type'] as String? ??
                                   'Bill review',
+                              style: tt.bodySmall?.copyWith(
+                                color: AppColors.textTertiary,
+                                fontSize: 10,
+                              ),
+                            )
+                          else if (session.isObd && obdRecord != null)
+                            Text(
+                              obdRecord.isPartial
+                                  ? '${obdRecord.capturedDurationSeconds}s / ${obdRecord.targetDurationSeconds}s'
+                                  : '${obdRecord.targetDurationSeconds}s captured',
                               style: tt.bodySmall?.copyWith(
                                 color: AppColors.textTertiary,
                                 fontSize: 10,

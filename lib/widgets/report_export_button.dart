@@ -31,6 +31,10 @@ class _ReportExportButtonState extends State<ReportExportButton> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.session.supportsPdfExport) {
+      return const SizedBox.shrink();
+    }
+
     return GestureDetector(
       onTap: _isExporting
           ? null

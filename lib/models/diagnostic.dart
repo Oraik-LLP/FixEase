@@ -1,4 +1,4 @@
-enum DiagnosticType { urgent, photo, invoiceAudit, live }
+enum DiagnosticType { urgent, photo, invoiceAudit, live, obdIdle, obdDrive }
 enum Severity { low, medium, high, critical }
 
 class SymptomCategory {
@@ -95,6 +95,7 @@ class DiagnosticSession {
     this.imageUrls = const [],
     this.aiResponse,
     this.aiResponseJson,
+    this.contextJson,
     this.healthScore,
     this.vehicleName,
     DateTime? createdAt,
@@ -110,9 +111,15 @@ class DiagnosticSession {
   final String? aiResponse;
   /// Full AI response stored as a JSON map for report detail rendering.
   final Map<String, dynamic>? aiResponseJson;
+  final Map<String, dynamic>? contextJson;
   final double? healthScore;
   final String? vehicleName;
   final DateTime createdAt;
+
+  bool get isObd =>
+      type == DiagnosticType.obdIdle || type == DiagnosticType.obdDrive;
+
+  bool get supportsPdfExport => !isObd;
 
   String get severityLabel => switch (severity) {
         Severity.low => 'Low',
@@ -126,6 +133,8 @@ class DiagnosticSession {
         DiagnosticType.photo => 'Photo Diagnosis',
         DiagnosticType.invoiceAudit => 'Invoice Audit',
         DiagnosticType.live => 'Gemini Live',
+        DiagnosticType.obdIdle => 'OBD Idle Scan',
+        DiagnosticType.obdDrive => 'OBD Drive Scan',
       };
 
   String get dateLabel {
@@ -153,6 +162,7 @@ class DiagnosticSession {
         'image_urls': imageUrls,
         'ai_response': aiResponse,
         'ai_response_json': aiResponseJson,
+        'context_json': contextJson,
         'health_score': healthScore,
         'vehicle_name': vehicleName,
         'created_at': createdAt.toIso8601String(),
@@ -169,7 +179,12 @@ class DiagnosticSession {
         description: j['description'] as String?,
         imageUrls: (j['image_urls'] as List?)?.cast<String>() ?? [],
         aiResponse: j['ai_response'] as String?,
-        aiResponseJson: j['ai_response_json'] as Map<String, dynamic>?,
+        aiResponseJson: j['ai_response_json'] is Map
+            ? Map<String, dynamic>.from(j['ai_response_json'] as Map)
+            : null,
+        contextJson: j['context_json'] is Map
+            ? Map<String, dynamic>.from(j['context_json'] as Map)
+            : null,
         healthScore: (j['health_score'] as num?)?.toDouble(),
         vehicleName: j['vehicle_name'] as String?,
         createdAt: DateTime.tryParse(j['created_at'] as String? ?? '') ??

@@ -8,6 +8,7 @@ import 'models/diagnostic.dart';
 import 'models/vehicle.dart';
 import 'screens/conversations/conversation_chat_screen.dart';
 import 'screens/diagnose/live_diagnose_screen.dart';
+import 'screens/diagnose/obd_pro_dashboard_screen.dart';
 import 'screens/diagnose/photo_diagnose_screen.dart';
 import 'screens/diagnose/urgent_wizard_screen.dart';
 import 'screens/garage/garage_tab_body.dart';
@@ -21,6 +22,7 @@ import 'services/conversation_service.dart';
 import 'services/diagnostic_service.dart';
 import 'services/garage_service.dart';
 import 'services/local_store_service.dart';
+import 'services/obd_pro_service.dart';
 import 'services/quota_service.dart';
 import 'services/reminder_scheduler_service.dart';
 import 'services/subscription_service.dart';
@@ -45,6 +47,9 @@ void main() async {
   } catch (_) {}
   try {
     await SubscriptionService.instance.restore();
+  } catch (_) {}
+  try {
+    await ObdProService.instance.load();
   } catch (_) {}
   try {
     await QuotaService.instance.refreshStatus();
@@ -726,6 +731,10 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                             Icons.receipt_long_rounded,
                                           DiagnosticType.live =>
                                             Icons.videocam_rounded,
+                                          DiagnosticType.obdIdle =>
+                                            Icons.air_rounded,
+                                          DiagnosticType.obdDrive =>
+                                            Icons.route_rounded,
                                         },
                                         size: 16,
                                         color: AppColors.accent,
@@ -740,6 +749,10 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                                               "Invoice Audit",
                                             DiagnosticType.live =>
                                               "Gemini Live",
+                                            DiagnosticType.obdIdle =>
+                                              "OBD Idle",
+                                            DiagnosticType.obdDrive =>
+                                              "OBD Drive",
                                           }} · ${s.dateLabel}',
                                           style: tt.bodyMedium,
                                         ),
@@ -1142,6 +1155,17 @@ class DiagnoseTabBody extends StatelessWidget {
             badge: 'BETA',
             onTap: () => launchLiveDiagnosis(context),
           ),
+          const SizedBox(height: 14),
+          _DiagnoseOptionCard(
+            icon: Icons.sensors_rounded,
+            title: 'OBD Pro Diagnostic Suite',
+            description:
+                'Connect a Bluetooth ELM327 adapter for live vitals, a one-time '
+                'ECU snapshot, and premium idle and drive scans.',
+            accentColor: const Color(0xFF7EE787),
+            badge: 'PRO',
+            onTap: () => launchObdProSuite(context),
+          ),
         ],
       ),
     );
@@ -1347,6 +1371,8 @@ class _ReportListCard extends StatelessWidget {
     final isUrgent = session.type == DiagnosticType.urgent;
     final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
     final isLive = session.type == DiagnosticType.live;
+    final isObdIdle = session.type == DiagnosticType.obdIdle;
+    final isObdDrive = session.type == DiagnosticType.obdDrive;
     final response = session.aiResponseJson != null
         ? AiDiagnosticResponse.fromJson(session.aiResponseJson!)
         : null;
@@ -1357,6 +1383,10 @@ class _ReportListCard extends StatelessWidget {
             ? Icons.receipt_long_rounded
             : isLive
                 ? Icons.videocam_rounded
+                : isObdIdle
+                    ? Icons.air_rounded
+                    : isObdDrive
+                        ? Icons.route_rounded
                 : Icons.camera_alt_outlined;
     final iconColor = isUrgent
         ? const Color(0xFFFF9800)
@@ -1364,6 +1394,10 @@ class _ReportListCard extends StatelessWidget {
             ? const Color(0xFFFF7043)
             : isLive
                 ? const Color(0xFF4CAF50)
+                : isObdIdle
+                    ? const Color(0xFF5DD6B2)
+                    : isObdDrive
+                        ? const Color(0xFF7EE787)
                 : AppColors.accent;
     final title = isUrgent
         ? 'Urgent Diagnosis'
@@ -1371,6 +1405,10 @@ class _ReportListCard extends StatelessWidget {
             ? 'Invoice Audit'
             : isLive
                 ? 'Gemini Live'
+                : isObdIdle
+                    ? 'OBD Idle Scan'
+                    : isObdDrive
+                        ? 'OBD Drive Scan'
                 : 'Photo Diagnosis';
     final isLocked = DiagnosticService.instance.isOlderThanMostRecentSessions(
           session,
@@ -1538,6 +1576,18 @@ class _ReportListCard extends StatelessWidget {
                               session.aiResponseJson?['document_type']
                                       as String? ??
                                   'Bill review',
+                              style: tt.bodySmall?.copyWith(
+                                color: AppColors.textTertiary,
+                                fontSize: 10,
+                              ),
+                            )
+                          else if (session.isObd)
+                            Text(
+                              session.contextJson?['obd_record']
+                                          ?['is_partial'] ==
+                                      true
+                                  ? 'Partial OBD scan'
+                                  : 'OBD telemetry',
                               style: tt.bodySmall?.copyWith(
                                 color: AppColors.textTertiary,
                                 fontSize: 10,

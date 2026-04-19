@@ -5,14 +5,418 @@ import 'package:flutter/services.dart';
 
 import '../../models/ai_response.dart';
 import '../../models/diagnostic.dart';
+import '../../models/obd.dart';
 import '../conversations/conversation_chat_screen.dart';
 import '../../services/conversation_service.dart';
+import '../../services/obd_processing_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_markdown_text.dart';
 import '../../widgets/health_score_card.dart';
 import '../../widgets/neuomorphic.dart';
 import '../../widgets/report_export_button.dart';
+
+ObdScanRecord? _obdRecordFromSession(DiagnosticSession session) {
+  final recordJson = session.contextJson?['obd_record'];
+  if (recordJson is! Map) return null;
+  try {
+    return ObdScanRecord.fromJson(Map<String, dynamic>.from(recordJson));
+  } catch (_) {
+    return null;
+  }
+}
+
+class _UnavailableReportCard extends StatelessWidget {
+  const _UnavailableReportCard({required this.session});
+
+  final DiagnosticSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return NeuPane(
+      child: Column(
+        children: [
+          const Icon(
+            Icons.info_outline_rounded,
+            size: 40,
+            color: AppColors.textTertiary,
+          ),
+          const SizedBox(height: 12),
+          Text('Diagnosis temporarily unavailable', style: tt.bodyMedium),
+          const SizedBox(height: 4),
+          Text(
+            'We could not complete the AI report because of a backend or connection issue. Please try again in a little while.',
+            style: tt.bodySmall,
+            textAlign: TextAlign.center,
+          ),
+          if (session.aiResponseJson?['error_code'] != null ||
+              session.aiResponse != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Error code: '
+              '${session.aiResponseJson?['error_code'] ?? 'report_unavailable'}',
+              style: tt.bodySmall?.copyWith(
+                color: AppColors.textTertiary,
+                fontFamily: 'monospace',
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _obdCompletionLabel(ObdCompletionReason reason) => switch (reason) {
+      ObdCompletionReason.completed => 'Completed',
+      ObdCompletionReason.bluetoothDisconnect => 'Bluetooth disconnect',
+      ObdCompletionReason.vehicleMoved => 'Vehicle moved',
+      ObdCompletionReason.cancelled => 'Cancelled',
+      ObdCompletionReason.backgroundInterrupted => 'App interrupted',
+    };
+
+String _obdMetricLabel(String metricKey) =>
+    ObdMetricCatalog.labels[metricKey] ?? metricKey;
+
+String _obdMetricUnit(String metricKey) => ObdMetricCatalog.units[metricKey] ?? '';
+
+String _formatObdValue(double value, String metricKey) {
+  final rounded = value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
+  final unit = _obdMetricUnit(metricKey);
+  return unit.isEmpty ? rounded : '$rounded $unit';
+}
+
+String _formatDurationChip(int seconds) {
+  final minutes = seconds ~/ 60;
+  final remaining = seconds % 60;
+  if (minutes == 0) return '${seconds}s';
+  return '${minutes}m ${remaining.toString().padLeft(2, '0')}s';
+}
+
+class _ObdTelemetrySection extends StatelessWidget {
+  const _ObdTelemetrySection({required this.record});
+
+  final ObdScanRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        NeuPane(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'OBD Scan Details',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _ObdInfoChip(
+                    label: record.isPartial ? 'Partial scan' : 'Full scan',
+                    color: record.isPartial
+                        ? const Color(0xFFFFB86C)
+                        : const Color(0xFF7DD3FC),
+                  ),
+                  _ObdInfoChip(
+                    label:
+                        '${_formatDurationChip(record.capturedDurationSeconds)} / ${_formatDurationChip(record.targetDurationSeconds)}',
+                  ),
+                  _ObdInfoChip(
+                    label: _obdCompletionLabel(record.completionReason),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (record.staticSnapshot.hasAnyData) ...[
+          const SizedBox(height: 16),
+          _ObdStaticSnapshotSection(snapshot: record.staticSnapshot),
+        ],
+        if (record.kind == ObdScanKind.idle &&
+            record.processedScan.idleStats.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _ObdIdleStatsSection(stats: record.processedScan.idleStats),
+        ],
+        if (record.kind == ObdScanKind.drive &&
+            record.processedScan.timelineSummary.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _ObdDriveSummarySection(summary: record.processedScan.timelineSummary),
+        ],
+        if (record.kind == ObdScanKind.drive &&
+            record.processedScan.driveTimeline.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _ObdDriveTimelineSection(frames: record.processedScan.driveTimeline),
+        ],
+      ],
+    );
+  }
+}
+
+class _ObdStaticSnapshotSection extends StatelessWidget {
+  const _ObdStaticSnapshotSection({required this.snapshot});
+
+  final ObdStaticSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return NeuPane(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Static Snapshot', style: tt.titleMedium),
+          const SizedBox(height: 10),
+          if (snapshot.vin?.trim().isNotEmpty == true)
+            _MetaRow('VIN', snapshot.vin!.trim()),
+          if (snapshot.storedDtcs.isNotEmpty)
+            _MetaRow('Stored DTCs', snapshot.storedDtcs.join(', ')),
+          if (snapshot.pendingDtcs.isNotEmpty)
+            _MetaRow('Pending DTCs', snapshot.pendingDtcs.join(', ')),
+          if (snapshot.controlModuleVoltage != null)
+            _MetaRow(
+              'Module Voltage',
+              '${snapshot.controlModuleVoltage!.toStringAsFixed(1)} V',
+            ),
+          if (snapshot.distanceSinceCodesClearedKm != null)
+            _MetaRow(
+              'Distance Since Clear',
+              '${snapshot.distanceSinceCodesClearedKm} km',
+            ),
+          if (snapshot.ambientAirTempC != null)
+            _MetaRow(
+              'Ambient Air Temp',
+              '${snapshot.ambientAirTempC!.toStringAsFixed(1)} C',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdIdleStatsSection extends StatelessWidget {
+  const _ObdIdleStatsSection({required this.stats});
+
+  final Map<String, ObdMetricStats> stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    final orderedKeys = ObdMetricCatalog.idleMetrics
+        .where(stats.containsKey)
+        .followedBy(
+          stats.keys.where((key) => !ObdMetricCatalog.idleMetrics.contains(key)),
+        );
+
+    return NeuPane(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Clean Idle Metrics', style: tt.titleMedium),
+          const SizedBox(height: 10),
+          for (final key in orderedKeys) ...[
+            _ObdMetricStatsTile(
+              metricKey: key,
+              stats: stats[key]!,
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdDriveSummarySection extends StatelessWidget {
+  const _ObdDriveSummarySection({required this.summary});
+
+  final Map<String, ObdMetricStats> summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    final orderedKeys = ObdMetricCatalog.driveMetrics
+        .where(summary.containsKey)
+        .followedBy(
+          summary.keys.where((key) => !ObdMetricCatalog.driveMetrics.contains(key)),
+        );
+
+    return NeuPane(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Drive Summary', style: tt.titleMedium),
+          const SizedBox(height: 10),
+          for (final key in orderedKeys) ...[
+            _ObdMetricStatsTile(
+              metricKey: key,
+              stats: summary[key]!,
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdDriveTimelineSection extends StatelessWidget {
+  const _ObdDriveTimelineSection({required this.frames});
+
+  final List<ObdDriveSnapshotFrame> frames;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return NeuPane(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Drive Timeline', style: tt.titleMedium),
+          const SizedBox(height: 6),
+          Text(
+            'Downsampled snapshot frames showing how the load run evolved over time.',
+            style: tt.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          for (final frame in frames) ...[
+            _ObdTimelineFrameCard(frame: frame),
+            const SizedBox(height: 10),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdMetricStatsTile extends StatelessWidget {
+  const _ObdMetricStatsTile({
+    required this.metricKey,
+    required this.stats,
+  });
+
+  final String metricKey;
+  final ObdMetricStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: AppColors.surfaceHighlight.withValues(alpha: 0.32),
+        border: Border.all(color: const Color(0x10FFFFFF), width: 0.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_obdMetricLabel(metricKey), style: tt.titleSmall),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ObdInfoChip(label: 'Avg ${_formatObdValue(stats.average, metricKey)}'),
+              _ObdInfoChip(label: 'Min ${_formatObdValue(stats.minimum, metricKey)}'),
+              _ObdInfoChip(label: 'Max ${_formatObdValue(stats.maximum, metricKey)}'),
+              _ObdInfoChip(label: 'Samples ${stats.sampleCount}'),
+              if (stats.droppedSampleCount > 0)
+                _ObdInfoChip(label: 'Dropped ${stats.droppedSampleCount}'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdTimelineFrameCard extends StatelessWidget {
+  const _ObdTimelineFrameCard({required this.frame});
+
+  final ObdDriveSnapshotFrame frame;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    final orderedEntries = ObdMetricCatalog.driveMetrics
+        .where(frame.values.containsKey)
+        .map((key) => MapEntry(key, frame.values[key]!));
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: AppColors.surfaceHighlight.withValues(alpha: 0.28),
+        border: Border.all(color: const Color(0x10FFFFFF), width: 0.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'T + ${_formatDurationChip((frame.elapsedMs / 1000).round())}',
+            style: tt.titleSmall?.copyWith(color: const Color(0xFF7DD3FC)),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final entry in orderedEntries)
+                _ObdInfoChip(
+                  label:
+                      '${_obdMetricLabel(entry.key)} ${_formatObdValue(entry.value, entry.key)}',
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdInfoChip extends StatelessWidget {
+  const _ObdInfoChip({
+    required this.label,
+    this.color = AppColors.textSecondary,
+  });
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: color.withValues(alpha: 0.12),
+        border: Border.all(
+          color: color.withValues(alpha: 0.18),
+          width: 0.6,
+        ),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+  }
+}
 
 class ReportDetailScreen extends StatelessWidget {
   const ReportDetailScreen({super.key, required this.session});
@@ -36,6 +440,8 @@ class ReportDetailScreen extends StatelessWidget {
     }
     return null;
   }
+
+  ObdScanRecord? get _obdRecord => _obdRecordFromSession(session);
 
   @override
   Widget build(BuildContext context) {
@@ -78,6 +484,18 @@ class ReportDetailScreen extends StatelessWidget {
                       if (session.type == DiagnosticType.live) ...[
                         _LiveConversationSection(session: session),
                         const SizedBox(height: 16),
+                      ] else if (session.isObd) ...[
+                        if (resp != null)
+                          DiagnosticResultCard(
+                            response: resp,
+                            session: session,
+                          )
+                        else
+                          _UnavailableReportCard(session: session),
+                        if (_obdRecord != null) ...[
+                          const SizedBox(height: 16),
+                          _ObdTelemetrySection(record: _obdRecord!),
+                        ],
                       ] else if (resp != null && session.type == DiagnosticType.invoiceAudit) ...[
                         DiagnosticResultCard(
                           response: resp,
@@ -143,36 +561,7 @@ class ReportDetailScreen extends StatelessWidget {
                           const SizedBox(height: 16),
                         ],
                       ] else
-                        NeuPane(
-                          child: Column(
-                            children: [
-                              const Icon(Icons.info_outline_rounded,
-                                  size: 40, color: AppColors.textTertiary),
-                              const SizedBox(height: 12),
-                              Text('Diagnosis temporarily unavailable',
-                                  style: tt.bodyMedium),
-                              const SizedBox(height: 4),
-                              Text(
-                                'We could not complete the AI report because of a backend or connection issue. Please try again in a little while.',
-                                style: tt.bodySmall,
-                                textAlign: TextAlign.center,
-                              ),
-                              if (session.aiResponseJson?['error_code'] != null ||
-                                  session.aiResponse != null) ...[
-                                const SizedBox(height: 10),
-                                Text(
-                                  'Error code: '
-                                  '${session.aiResponseJson?['error_code'] ?? 'report_unavailable'}',
-                                  style: tt.bodySmall?.copyWith(
-                                    color: AppColors.textTertiary,
-                                    fontFamily: 'monospace',
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
+                        _UnavailableReportCard(session: session),
 
                       const SizedBox(height: 16),
                       _PastConversationsSection(session: session),
@@ -245,30 +634,47 @@ class _ReportHeader extends StatelessWidget {
     final isUrgent = session.type == DiagnosticType.urgent;
     final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
     final isLive = session.type == DiagnosticType.live;
+    final isObdIdle = session.type == DiagnosticType.obdIdle;
+    final isObdDrive = session.type == DiagnosticType.obdDrive;
+    final obdRecord = _obdRecordFromSession(session);
     final invoiceResponse = session.aiResponseJson != null
         ? AiDiagnosticResponse.fromJson(session.aiResponseJson!)
         : null;
     final accentColor = isInvoiceAudit && invoiceResponse != null
         ? invoiceResponse.statusColor
         : isLive
-        ? const Color(0xFF4CAF50)
-        : isUrgent
-        ? const Color(0xFFFF9800)
-        : AppColors.accent;
+            ? const Color(0xFF4CAF50)
+            : isUrgent
+                ? const Color(0xFFFF9800)
+                : isObdIdle || isObdDrive
+                    ? const Color(0xFF7DD3FC)
+                    : AppColors.accent;
     final icon = isUrgent
         ? Icons.warning_amber_rounded
         : isInvoiceAudit
             ? Icons.receipt_long_rounded
             : isLive
                 ? Icons.videocam_rounded
-                : Icons.camera_alt_rounded;
+                : isObdIdle
+                    ? Icons.nights_stay_rounded
+                    : isObdDrive
+                        ? Icons.route_rounded
+                        : Icons.camera_alt_rounded;
     final title = isUrgent
         ? 'Urgent Diagnosis'
         : isInvoiceAudit
             ? 'Invoice Audit'
             : isLive
                 ? 'Gemini Live'
-                : 'Photo Diagnosis';
+                : isObdIdle
+                    ? (obdRecord?.isPartial == true
+                        ? 'Partial Idle Scan'
+                        : 'Idle Health Scan')
+                    : isObdDrive
+                        ? (obdRecord?.isPartial == true
+                            ? 'Partial Drive Scan'
+                            : 'Drive Load Scan')
+                        : 'Photo Diagnosis';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -330,8 +736,12 @@ class _ReportHeader extends StatelessWidget {
                 isLive
                     ? 'Conversation'
                     : isInvoiceAudit
-                    ? (invoiceResponse?.healthLabel ?? 'Audit')
-                    : session.severityLabel,
+                        ? (invoiceResponse?.healthLabel ?? 'Audit')
+                        : session.isObd
+                            ? (obdRecord?.isPartial == true
+                                ? 'Partial OBD Scan'
+                                : 'OBD Scan')
+                            : session.severityLabel,
                 style: tt.bodySmall?.copyWith(
                   color: accentColor,
                   fontSize: 10,
@@ -380,10 +790,11 @@ class _HealthSection extends StatelessWidget {
                     Expanded(
                       child: Text('Overall Health', style: tt.titleLarge),
                     ),
-                    ReportExportButton(
-                      session: session,
-                      response: response,
-                    ),
+                    if (session.supportsPdfExport)
+                      ReportExportButton(
+                        session: session,
+                        response: response,
+                      ),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -1201,6 +1612,7 @@ class _MetadataSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
+    final obdRecord = _obdRecordFromSession(session);
 
     return NeuPane(
       padding: const EdgeInsets.all(14),
@@ -1216,20 +1628,35 @@ class _MetadataSection extends StatelessWidget {
                 DiagnosticType.photo => 'Photo',
                 DiagnosticType.invoiceAudit => 'Invoice Audit',
                 DiagnosticType.live => 'Gemini Live',
+                DiagnosticType.obdIdle => 'OBD Idle Scan',
+                DiagnosticType.obdDrive => 'OBD Drive Scan',
               }),
           _MetaRow(
-            session.type == DiagnosticType.invoiceAudit
+            session.isObd
+                ? 'Scan Status'
+                : session.type == DiagnosticType.invoiceAudit
                 ? 'Assessment'
                 : session.type == DiagnosticType.live
                     ? 'Session'
                     : 'Severity',
-            session.type == DiagnosticType.invoiceAudit
+            session.isObd
+                ? (obdRecord == null
+                    ? 'OBD telemetry'
+                    : obdRecord.isPartial
+                        ? 'Partial - ${_obdCompletionLabel(obdRecord.completionReason)}'
+                        : 'Complete - ${_obdCompletionLabel(obdRecord.completionReason)}')
+                : session.type == DiagnosticType.invoiceAudit
                 ? (session.aiResponseJson?['verdict'] as String? ?? 'Audit')
                 : session.type == DiagnosticType.live
                     ? 'Conversation'
-                : session.severityLabel,
+                    : session.severityLabel,
           ),
           _MetaRow('Date', '${session.dateLabel} ${session.timeLabel}'),
+          if (session.isObd && obdRecord != null)
+            _MetaRow(
+              'Duration',
+              '${_formatDurationChip(obdRecord.capturedDurationSeconds)} / ${_formatDurationChip(obdRecord.targetDurationSeconds)}',
+            ),
           if (session.description != null && session.description!.isNotEmpty)
             _MetaRow('Description', session.description!),
         ],

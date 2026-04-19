@@ -20,7 +20,7 @@ class DiagnosticService extends ChangeNotifier {
   int reportCountForCurrentMonth() {
     final now = DateTime.now();
     return _sessions.where((session) {
-      if (session.type == DiagnosticType.live) return false;
+      if (session.type == DiagnosticType.live || session.isObd) return false;
       return session.createdAt.year == now.year &&
           session.createdAt.month == now.month;
     }).length;

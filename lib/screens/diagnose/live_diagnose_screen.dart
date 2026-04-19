@@ -11,6 +11,7 @@ import '../../models/conversation.dart';
 import '../../models/diagnostic.dart';
 import '../../services/file_validation_service.dart';
 import '../../services/gemini_live_service.dart';
+import '../../services/obd_pro_service.dart';
 import '../../services/quota_service.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
@@ -34,6 +35,7 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
   bool _cameraBusy = false;
   bool _checking = true;
   DeviceCapability? _capability;
+  bool _useObdInsight = true;
   int _lastRecordingCapEvent = 0;
   String? _lastHardCapPromptedThreadId;
   static const _pipWidth = 118.0;
@@ -43,8 +45,38 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
   @override
   void initState() {
     super.initState();
+    final vehicleId = VehicleService.instance.selected?.id;
+    if (vehicleId != null) {
+      _useObdInsight = ObdProService.instance.isPromptInjectionEnabled(vehicleId);
+    }
     _initCamera();
     _runChecks();
+  }
+
+  Map<String, dynamic>? _selectedObdPromptContextJson({
+    bool respectToggle = true,
+  }) {
+    final vehicleId = VehicleService.instance.selected?.id;
+    if (vehicleId == null) return null;
+    final context = ObdProService.instance.latestPromptContextForVehicle(vehicleId);
+    if (context == null) return null;
+    if (respectToggle && !_useObdInsight) return null;
+    return context.toJson();
+  }
+
+  Future<void> _setUseObdInsight(bool value) async {
+    final vehicleId = VehicleService.instance.selected?.id;
+    if (mounted) {
+      setState(() => _useObdInsight = value);
+    } else {
+      _useObdInsight = value;
+    }
+    GeminiLiveService.instance.setObdContext(
+      value ? _selectedObdPromptContextJson(respectToggle: false) : null,
+    );
+    if (vehicleId != null) {
+      await ObdProService.instance.setPromptInjectionEnabled(vehicleId, value);
+    }
   }
 
   Future<void> _initCamera() async {
@@ -100,7 +132,10 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
       if (cap.isReady) {
         final vehicle = VehicleService.instance.selected;
         if (vehicle != null) {
-          await GeminiLiveService.instance.startSession(vehicle);
+          await GeminiLiveService.instance.startSession(
+            vehicle,
+            obdContext: _selectedObdPromptContextJson(),
+          );
         }
       }
     } catch (_) {
@@ -451,6 +486,7 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     return ListenableBuilder(
       listenable: Listenable.merge([
         GeminiLiveService.instance,
+        ObdProService.instance,
         SubscriptionService.instance,
       ]),
       builder: (context, _) {
@@ -460,6 +496,11 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
         final isDone = svc.state == LiveSessionState.done;
         final cameraEnabled = _cameraEnabled;
         final threadId = svc.threadId;
+        final vehicleId = VehicleService.instance.selected?.id;
+        final latestObdContext = vehicleId == null
+            ? null
+            : ObdProService.instance.latestPromptContextForVehicle(vehicleId);
+        final showObdToggle = latestObdContext != null;
         final limits = threadId == null
             ? null
             : SubscriptionService.instance.threadLimitStatus(
@@ -524,6 +565,14 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
 
         return Column(
           children: [
+            if (showObdToggle)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: _LiveObdPromptToggle(
+                  value: _useObdInsight,
+                  onChanged: _setUseObdInsight,
+                ),
+              ),
             if (SubscriptionService.instance.isDemoMode)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -1009,6 +1058,48 @@ class _LiveCameraPip extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _LiveObdPromptToggle extends StatelessWidget {
+  const _LiveObdPromptToggle({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return NeuPane(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Use latest OBD Pro insight', style: tt.titleMedium),
+                const SizedBox(height: 4),
+                Text(
+                  'Append the latest saved idle and drive findings to future live turns for this vehicle.',
+                  style: tt.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          NeuToggle(
+            value: value,
+            onChanged: onChanged,
+          ),
+        ],
       ),
     );
   }

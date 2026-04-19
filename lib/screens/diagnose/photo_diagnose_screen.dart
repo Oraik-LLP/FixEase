@@ -11,6 +11,7 @@ import 'invoice_audit_screen.dart';
 import '../../services/ai_service.dart';
 import '../../services/diagnostic_service.dart';
 import '../../services/file_validation_service.dart';
+import '../../services/obd_pro_service.dart';
 import '../../services/quota_service.dart';
 import '../../services/review_prompt_service.dart';
 import '../../services/storage_service.dart';
@@ -35,6 +36,16 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
   int _step = 0; // 0=capture, 1=preview+describe, 2=analyzing, 3=result
   AiDiagnosticResponse? _result;
   DiagnosticSession? _session;
+  bool _useObdInsight = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final vehicleId = VehicleService.instance.selected?.id;
+    if (vehicleId != null) {
+      _useObdInsight = ObdProService.instance.isPromptInjectionEnabled(vehicleId);
+    }
+  }
 
   bool get _canProceed => switch (_step) {
         0 => _images.isNotEmpty,
@@ -177,6 +188,9 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
         images: _images,
         description:
             _descCtrl.text.trim().isNotEmpty ? _descCtrl.text.trim() : null,
+        obdContext: _useObdInsight
+            ? ObdProService.instance.promptContextForVehicle(vehicle.id)?.toJson()
+            : null,
       );
 
       final session = DiagnosticSession(
@@ -534,9 +548,28 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
               ],
             ),
           ),
+          if (_obdContextAvailable) ...[
+            const SizedBox(height: 14),
+            _ObdPromptToggle(
+              value: _useObdInsight,
+              onChanged: (value) async {
+                final vehicleId = VehicleService.instance.selected?.id;
+                if (vehicleId == null) return;
+                setState(() => _useObdInsight = value);
+                await ObdProService.instance
+                    .setPromptInjectionEnabled(vehicleId, value);
+              },
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  bool get _obdContextAvailable {
+    final vehicleId = VehicleService.instance.selected?.id;
+    if (vehicleId == null) return false;
+    return ObdProService.instance.hasInsightsForVehicle(vehicleId);
   }
 
   // ── Step 2: Analyzing ─────────────────────────────────────────────────
@@ -630,6 +663,46 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
           NeuPrimaryButton(
             label: 'Done',
             onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ObdPromptToggle extends StatelessWidget {
+  const _ObdPromptToggle({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return NeuPane(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Use latest OBD Pro insight', style: tt.titleMedium),
+                const SizedBox(height: 4),
+                Text(
+                  'Silently append the latest saved OBD idle and drive findings to this photo analysis.',
+                  style: tt.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          NeuToggle(
+            value: value,
+            onChanged: onChanged,
           ),
         ],
       ),

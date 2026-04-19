@@ -552,6 +552,7 @@ class _ComparisonTable extends StatelessWidget {
     const rows = <(String, String, String)>[
       ('Urgent & photo scans', '3 / month', 'Unlimited'),
       ('Invoice auditing', 'Locked', 'Included'),
+      ('OBD Pro Diagnostic Suite', 'Locked', 'Included'),
       ('Tech PDF exports', 'First 2 monthly reports', 'Included'),
       ('Older diagnostic history', 'Newest 2 sessions', 'Included'),
       ('Live audio length', '3 minutes', '10 minutes'),

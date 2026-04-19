@@ -114,6 +114,7 @@ class GeminiLiveService extends ChangeNotifier {
   bool _historySessionSaved = false;
   String? _threadId;
   int _sessionGeneration = 0;
+  Map<String, dynamic>? _obdContext;
 
   final AudioRecorder _recorder = AudioRecorder();
   late final FlutterTts _tts;
@@ -135,6 +136,7 @@ class GeminiLiveService extends ChangeNotifier {
   bool get isActive =>
       _state == LiveSessionState.streaming ||
       _state == LiveSessionState.analyzing;
+  bool get hasObdContext => _obdContext != null && _obdContext!.isNotEmpty;
   Duration get sessionDuration => _sessionStart != null
       ? DateTime.now().difference(_sessionStart!)
       : Duration.zero;
@@ -178,7 +180,10 @@ class GeminiLiveService extends ChangeNotifier {
     }
   }
 
-  Future<void> startSession(Vehicle vehicle) async {
+  Future<void> startSession(
+    Vehicle vehicle, {
+    Map<String, dynamic>? obdContext,
+  }) async {
     _sessionGeneration++;
     _vehicle = vehicle;
     _messages.clear();
@@ -187,6 +192,7 @@ class GeminiLiveService extends ChangeNotifier {
     _historySession = null;
     _historySessionSaved = false;
     _threadId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    _obdContext = obdContext == null ? null : Map<String, dynamic>.from(obdContext);
     _syncAudioLimit();
     _state = LiveSessionState.connecting;
     notifyListeners();
@@ -208,6 +214,12 @@ class GeminiLiveService extends ChangeNotifier {
       text:
           'Greet the user briefly and ask what car issue they are experiencing.',
     );
+  }
+
+  void setObdContext(Map<String, dynamic>? obdContext) {
+    _obdContext =
+        obdContext == null ? null : Map<String, dynamic>.from(obdContext);
+    notifyListeners();
   }
 
   Future<void> toggleRecording() async {
@@ -470,6 +482,8 @@ class GeminiLiveService extends ChangeNotifier {
                 'mileage_km': _vehicle!.mileageKm,
               }
             : null,
+        if (_obdContext != null && _obdContext!.isNotEmpty)
+          'obd_context': _obdContext,
         'history': _messages
             .where(
               (message) =>
@@ -672,6 +686,7 @@ class GeminiLiveService extends ChangeNotifier {
     _historySession = null;
     _historySessionSaved = false;
     _threadId = null;
+    _obdContext = null;
     notifyListeners();
   }
 
