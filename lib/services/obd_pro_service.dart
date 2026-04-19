@@ -504,7 +504,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     String command,
     ObdCommandResult response,
   ) {
-    if (response.isNoData || response.isStopped) {
+    if (response.isNoData || response.isStopped || response.isTimedOut) {
       return;
     }
     switch (command) {
@@ -513,48 +513,59 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
           vin: response.textValue,
           capturedAt: DateTime.now(),
         );
+        break;
       case '03':
         _staticSnapshot = _staticSnapshot.copyWith(
           storedDtcs: response.codes,
           capturedAt: DateTime.now(),
         );
+        break;
       case '07':
         _staticSnapshot = _staticSnapshot.copyWith(
           pendingDtcs: response.codes,
           capturedAt: DateTime.now(),
         );
+        break;
       case '0142':
         _staticSnapshot = _staticSnapshot.copyWith(
           controlModuleVoltage: response.numericValue,
           capturedAt: DateTime.now(),
         );
+        break;
       case '0131':
         _staticSnapshot = _staticSnapshot.copyWith(
           distanceSinceCodesClearedKm: response.integerValue,
           capturedAt: DateTime.now(),
         );
+        break;
       case '0146':
         _staticSnapshot = _staticSnapshot.copyWith(
           ambientAirTempC: response.numericValue,
           capturedAt: DateTime.now(),
         );
+        break;
     }
     notifyListeners();
   }
 
+  final Map<String, double> _pendingCycleValues = <String, double>{};
+
   Future<void> _runIdleScanLoop() async {
     var commandIndex = 0;
+    _pendingCycleValues.clear();
     while (_isConnected && _state == ObdSuiteState.idleRunning) {
       final command = ObdProtocol.idleCommands[commandIndex];
       final response = await _sendCommand(command);
-      _recordScanMetric(command, response);
+      _accumulateCycleMetric(command, response);
       commandIndex = (commandIndex + 1) % ObdProtocol.idleCommands.length;
 
       if (commandIndex == 0) {
+        _flushCycleSnapshot();
+
         final speedCheck = await _sendCommand('010D');
-        final speed = speedCheck.integerValue ?? 0;
+        final speed = speedCheck.integerValue ?? liveVitals.speedKph;
         _updateLiveVitals('010D', speedCheck);
-        if (speed > 0) {
+        if ((speed ?? 0) > 0) {
           final captured = _capturedDuration;
           if (ObdPartialRecoveryPolicy.canFinalizeIdlePartial(captured)) {
             await _finalizeScan(
@@ -572,6 +583,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       if (_capturedDuration >= _idleTargetDuration) {
+        _flushCycleSnapshot();
         await _finalizeScan(
           kind: ObdScanKind.idle,
           isPartial: false,
@@ -609,8 +621,15 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       if (_state == ObdSuiteState.driveRunning) {
-        _recordScanMetric(command, response);
+        _accumulateCycleMetric(command, response);
+
+        final nextIndex = (commandIndex + 1) % ObdProtocol.driveCommands.length;
+        if (nextIndex == 0) {
+          _flushCycleSnapshot();
+        }
+
         if (_capturedDuration >= _driveTargetDuration) {
+          _flushCycleSnapshot();
           await _finalizeScan(
             kind: ObdScanKind.drive,
             isPartial: false,
@@ -626,8 +645,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  void _recordScanMetric(String command, ObdCommandResult response) {
-    if (response.isNoData || response.isStopped) {
+  void _accumulateCycleMetric(String command, ObdCommandResult response) {
+    if (response.isNoData || response.isStopped || response.isTimedOut) {
       return;
     }
     final metricKey = _metricKeyForCommand(command);
@@ -638,17 +657,26 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     if (metricValue == null) {
       return;
     }
+    _pendingCycleValues[metricKey] = metricValue;
+  }
+
+  void _flushCycleSnapshot() {
+    if (_pendingCycleValues.isEmpty) {
+      return;
+    }
     final startedAt = _scanStartedAt;
     if (startedAt == null) {
       return;
     }
+    final now = DateTime.now();
     _scanSamples.add(
       ObdSampleFrame(
-        timestamp: DateTime.now(),
-        elapsedMs: DateTime.now().difference(startedAt).inMilliseconds,
-        values: {metricKey: metricValue},
+        timestamp: now,
+        elapsedMs: now.difference(startedAt).inMilliseconds,
+        values: Map<String, double>.from(_pendingCycleValues),
       ),
     );
+    _pendingCycleValues.clear();
     notifyListeners();
   }
 
@@ -879,7 +907,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
           onTimeout: () => ObdCommandResult(
             command: normalizedCommand,
             raw: 'TIMEOUT',
-            isStopped: true,
+            isTimedOut: true,
           ),
         );
         _pendingCommand = null;
@@ -906,7 +934,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _updateLiveVitals(String command, ObdCommandResult response) {
-    if (response.isNoData || response.isStopped) {
+    if (response.isNoData || response.isStopped || response.isTimedOut) {
       return;
     }
 
@@ -918,6 +946,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
           coolantTempC: _liveVitals.coolantTempC,
           updatedAt: DateTime.now(),
         );
+        break;
       case '010D':
         _liveVitals = ObdLiveVitals(
           rpm: _liveVitals.rpm,
@@ -925,6 +954,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
           coolantTempC: _liveVitals.coolantTempC,
           updatedAt: DateTime.now(),
         );
+        break;
       case '0105':
         _liveVitals = ObdLiveVitals(
           rpm: _liveVitals.rpm,
@@ -932,6 +962,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
           coolantTempC: response.numericValue ?? _liveVitals.coolantTempC,
           updatedAt: DateTime.now(),
         );
+        break;
       default:
         return;
     }

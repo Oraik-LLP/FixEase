@@ -8,6 +8,7 @@ class ObdCommandResult {
     this.codes = const [],
     this.isNoData = false,
     this.isStopped = false,
+    this.isTimedOut = false,
     this.isAcknowledged = false,
   });
 
@@ -19,6 +20,7 @@ class ObdCommandResult {
   final List<String> codes;
   final bool isNoData;
   final bool isStopped;
+  final bool isTimedOut;
   final bool isAcknowledged;
 
   bool get hasValue =>
@@ -63,6 +65,11 @@ abstract final class ObdProtocol {
     return lines.join(' | ');
   }
 
+  static final _noisePattern = RegExp(
+    r'^(SEARCHING|NO DATA|STOPPED|UNABLE TO CONNECT|BUS INIT|CAN ERROR|\?|AT)',
+    caseSensitive: false,
+  );
+
   static List<String> extractHexTokens(String frame) {
     final cleaned = frame.replaceAll('\r', '\n');
     final tokens = <String>[];
@@ -72,10 +79,11 @@ abstract final class ObdProtocol {
       if (line.isEmpty || line == '>') {
         continue;
       }
-      if (line.startsWith('SEARCHING')) {
+      if (_noisePattern.hasMatch(line)) {
         continue;
       }
       line = line.replaceFirst(RegExp(r'^[0-9A-F]+:'), '');
+      line = line.replaceFirst(RegExp(r'^\s*01[0-9A-F]{2}\s*'), '');
       final compact = line.replaceAll(RegExp(r'[^0-9A-F]'), '');
       if (compact.length < 2 || compact.length.isOdd) {
         continue;
@@ -256,18 +264,43 @@ abstract final class ObdProtocol {
     required String pid,
     required int count,
   }) {
+    final expectedFrameLen = 2 + count;
+
     for (var index = 0; index <= tokens.length - (count + 2); index++) {
-      if (tokens[index] == '41' && tokens[index + 1] == pid) {
-        final values = <int>[];
-        for (var offset = 0; offset < count; offset++) {
-          final parsed = int.tryParse(tokens[index + 2 + offset], radix: 16);
-          if (parsed == null) {
-            return null;
-          }
-          values.add(parsed);
-        }
-        return values;
+      if (tokens[index] != '41' || tokens[index + 1] != pid) {
+        continue;
       }
+
+      if (index > 0) {
+        final preceding = tokens[index - 1];
+        final precedingValue = int.tryParse(preceding, radix: 16);
+        if (precedingValue != null &&
+            precedingValue > 0x1F &&
+            preceding != '49' &&
+            preceding != '43' &&
+            preceding != '47') {
+          continue;
+        }
+      }
+
+      if (index + expectedFrameLen > tokens.length) {
+        continue;
+      }
+
+      final values = <int>[];
+      var valid = true;
+      for (var offset = 0; offset < count; offset++) {
+        final parsed = int.tryParse(tokens[index + 2 + offset], radix: 16);
+        if (parsed == null) {
+          valid = false;
+          break;
+        }
+        values.add(parsed);
+      }
+      if (!valid) {
+        continue;
+      }
+      return values;
     }
     return null;
   }
@@ -296,6 +329,8 @@ abstract final class ObdProtocol {
     return codes;
   }
 
+  static final _vinPattern = RegExp(r'^[A-HJ-NPR-Z0-9]{17}$');
+
   static String? _extractVin(List<String> tokens) {
     final vinBytes = <int>[];
     for (var index = 0; index <= tokens.length - 3; index++) {
@@ -322,7 +357,15 @@ abstract final class ObdProtocol {
     }
 
     final vin = String.fromCharCodes(vinBytes).trim();
-    return vin.isEmpty ? null : vin;
+    if (vin.isEmpty) {
+      return null;
+    }
+
+    if (!_vinPattern.hasMatch(vin)) {
+      return null;
+    }
+
+    return vin;
   }
 
   static String _decodeDtc(int firstByte, int secondByte) {
