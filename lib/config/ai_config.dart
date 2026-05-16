@@ -3,7 +3,7 @@
 abstract final class AiConfig {
   static const backendUrl = String.fromEnvironment(
     'AI_BACKEND_URL',
-    defaultValue: '',
+    defaultValue: 'https://api.fixease.oraik.co',
   );
 
   static bool get isConfigured => backendUrl.isNotEmpty;
