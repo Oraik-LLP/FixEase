@@ -1066,6 +1066,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _speakDriveCompletion() async {
     try {
       await _tts.stop();
+      await _tts.setLanguage('en-US');
       await _tts.speak('Diagnostic complete. You can safely pull over.');
     } catch (_) {}
   }

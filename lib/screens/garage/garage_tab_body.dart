@@ -346,6 +346,15 @@ class _GarageDashboard extends StatelessWidget {
                                 color: AppColors.accent,
                               ),
                             ),
+                            if (vehicle.maskedVin != null) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                'VIN ${vehicle.maskedVin}',
+                                style: tt.bodySmall?.copyWith(
+                                  color: AppColors.textTertiary,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

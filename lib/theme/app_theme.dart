@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/theme_service.dart';
+
 /// Palette derived from Tesla Cybertruck dark UI reference:
 ///   - Near-black base (#111114)
 ///   - Subtle lifted surfaces (#1B1B1F)
@@ -20,10 +22,19 @@ abstract final class AppColors {
   static const shadowLight = Color(0xFF222228);
 }
 
-TextTheme _fixEaseTextTheme() {
+TextTheme _fixEaseTextTheme(Brightness brightness) {
   final base = GoogleFonts.interTextTheme(
-    ThemeData(brightness: Brightness.dark).textTheme,
+    ThemeData(brightness: brightness).textTheme,
   );
+  final primary = brightness == Brightness.dark
+      ? AppColors.textPrimary
+      : AppColorsLight.textPrimary;
+  final secondary = brightness == Brightness.dark
+      ? AppColors.textSecondary
+      : AppColorsLight.textSecondary;
+  final tertiary = brightness == Brightness.dark
+      ? AppColors.textTertiary
+      : AppColorsLight.textTertiary;
 
   return base.copyWith(
     displayLarge: GoogleFonts.inter(
@@ -31,109 +42,129 @@ TextTheme _fixEaseTextTheme() {
       fontWeight: FontWeight.w300,
       letterSpacing: -1.5,
       height: 1.05,
-      color: AppColors.textPrimary,
+      color: primary,
     ),
     headlineLarge: GoogleFonts.inter(
       fontSize: 28,
       fontWeight: FontWeight.w700,
       letterSpacing: -0.6,
       height: 1.15,
-      color: AppColors.textPrimary,
+      color: primary,
     ),
     headlineMedium: GoogleFonts.inter(
       fontSize: 20,
       fontWeight: FontWeight.w700,
       letterSpacing: -0.4,
       height: 1.22,
-      color: AppColors.textPrimary,
+      color: primary,
     ),
     titleLarge: GoogleFonts.inter(
       fontSize: 16,
       fontWeight: FontWeight.w600,
       letterSpacing: -0.2,
       height: 1.3,
-      color: AppColors.textPrimary,
+      color: primary,
     ),
     titleMedium: GoogleFonts.inter(
       fontSize: 14,
       fontWeight: FontWeight.w600,
       letterSpacing: -0.15,
       height: 1.35,
-      color: AppColors.textPrimary,
+      color: primary,
     ),
     bodyLarge: GoogleFonts.inter(
       fontSize: 15,
       fontWeight: FontWeight.w400,
       letterSpacing: -0.08,
       height: 1.5,
-      color: AppColors.textSecondary,
+      color: secondary,
     ),
     bodyMedium: GoogleFonts.inter(
       fontSize: 13,
       fontWeight: FontWeight.w400,
       letterSpacing: 0,
       height: 1.45,
-      color: AppColors.textSecondary,
+      color: secondary,
     ),
     bodySmall: GoogleFonts.inter(
       fontSize: 11,
       fontWeight: FontWeight.w400,
       letterSpacing: 0.05,
       height: 1.4,
-      color: AppColors.textTertiary,
+      color: tertiary,
     ),
     labelLarge: GoogleFonts.inter(
       fontSize: 14,
       fontWeight: FontWeight.w600,
       letterSpacing: -0.1,
       height: 1.2,
-      color: AppColors.textPrimary,
+      color: primary,
     ),
     labelSmall: GoogleFonts.inter(
       fontSize: 11,
       fontWeight: FontWeight.w500,
       letterSpacing: 0.4,
       height: 1.2,
-      color: AppColors.textSecondary,
+      color: secondary,
     ),
   );
 }
 
-ThemeData buildFixEaseTheme() {
-  final textTheme = _fixEaseTextTheme();
+ThemeData _buildTheme(Brightness brightness) {
+  final isLight = brightness == Brightness.light;
+  final accent = isLight ? AppColorsLight.accent : AppColors.accent;
+  final surface = isLight ? AppColorsLight.surface : AppColors.surface;
+  final textPrimary =
+      isLight ? AppColorsLight.textPrimary : AppColors.textPrimary;
+  final textSecondary =
+      isLight ? AppColorsLight.textSecondary : AppColors.textSecondary;
+  final textTertiary =
+      isLight ? AppColorsLight.textTertiary : AppColors.textTertiary;
+  final backgroundDeep =
+      isLight ? AppColorsLight.backgroundDeep : AppColors.backgroundDeep;
+  final textTheme = _fixEaseTextTheme(brightness);
 
   return ThemeData(
-    brightness: Brightness.dark,
+    brightness: brightness,
     useMaterial3: true,
     scaffoldBackgroundColor: Colors.transparent,
     textTheme: textTheme,
-    colorScheme: const ColorScheme.dark(
-      primary: AppColors.accent,
-      onPrimary: AppColors.textPrimary,
-      surface: AppColors.surface,
-      onSurface: AppColors.textPrimary,
-      secondary: AppColors.accent,
-      onSecondary: AppColors.textPrimary,
-    ),
-    iconTheme: const IconThemeData(
-      color: AppColors.textSecondary,
+    colorScheme: brightness == Brightness.dark
+        ? const ColorScheme.dark(
+            primary: Color(0xFF009DFF),
+            onPrimary: Color(0xFFFFFFFF),
+            surface: Color(0xFF1B1B1F),
+            onSurface: Color(0xFFFFFFFF),
+            secondary: Color(0xFF009DFF),
+            onSecondary: Color(0xFFFFFFFF),
+          )
+        : ColorScheme.light(
+            primary: accent,
+            onPrimary: Colors.white,
+            surface: surface,
+            onSurface: textPrimary,
+            secondary: accent,
+            onSecondary: Colors.white,
+          ),
+    iconTheme: IconThemeData(
+      color: textSecondary,
       size: 20,
     ),
     actionIconTheme: ActionIconThemeData(
-      backButtonIconBuilder: (BuildContext context) => const Icon(
+      backButtonIconBuilder: (BuildContext context) => Icon(
         Icons.arrow_back_ios_new_rounded,
         size: 18,
-        color: AppColors.textPrimary,
+        color: textPrimary,
       ),
-      closeButtonIconBuilder: (BuildContext context) => const Icon(
+      closeButtonIconBuilder: (BuildContext context) => Icon(
         Icons.close_rounded,
         size: 20,
-        color: AppColors.textPrimary,
+        color: textPrimary,
       ),
     ),
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(
-        foregroundColor: AppColors.textSecondary,
+        foregroundColor: textSecondary,
         iconSize: 20,
         padding: const EdgeInsets.all(8),
         minimumSize: const Size(36, 36),
@@ -145,7 +176,7 @@ ThemeData buildFixEaseTheme() {
       scrolledUnderElevation: 0,
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
-      foregroundColor: AppColors.textPrimary,
+      foregroundColor: textPrimary,
       centerTitle: true,
       toolbarHeight: 48,
       titleSpacing: 0,
@@ -153,21 +184,21 @@ ThemeData buildFixEaseTheme() {
         fontSize: 15,
         fontWeight: FontWeight.w600,
         letterSpacing: -0.2,
-        color: AppColors.textPrimary,
+        color: textPrimary,
       ),
-      iconTheme: const IconThemeData(
-        color: AppColors.textSecondary,
+      iconTheme: IconThemeData(
+        color: textSecondary,
         size: 20,
       ),
-      actionsIconTheme: const IconThemeData(
-        color: AppColors.textSecondary,
+      actionsIconTheme: IconThemeData(
+        color: textSecondary,
         size: 20,
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
       height: 64,
-      backgroundColor: AppColors.backgroundDeep,
-      indicatorColor: AppColors.accent.withValues(alpha: 0.15),
+      backgroundColor: backgroundDeep,
+      indicatorColor: accent.withValues(alpha: 0.15),
       surfaceTintColor: Colors.transparent,
       labelTextStyle: WidgetStateProperty.resolveWith((states) {
         final selected = states.contains(WidgetState.selected);
@@ -176,13 +207,13 @@ ThemeData buildFixEaseTheme() {
           fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
           letterSpacing: 0.25,
           height: 1.1,
-          color: selected ? AppColors.accent : AppColors.textTertiary,
+          color: selected ? accent : textTertiary,
         );
       }),
       iconTheme: WidgetStateProperty.resolveWith((states) {
         final selected = states.contains(WidgetState.selected);
         return IconThemeData(
-          color: selected ? AppColors.accent : AppColors.textTertiary,
+          color: selected ? accent : textTertiary,
           size: 22,
         );
       }),
@@ -197,6 +228,10 @@ ThemeData buildFixEaseTheme() {
   );
 }
 
+ThemeData buildFixEaseTheme() => _buildTheme(Brightness.dark);
+
+ThemeData buildFixEaseLightTheme() => _buildTheme(Brightness.light);
+
 /// Near-black layered background matching reference automotive UI.
 class AppBackground extends StatelessWidget {
   const AppBackground({super.key, required this.child});
@@ -205,17 +240,24 @@ class AppBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isLight = Theme.of(context).brightness == Brightness.light;
     return DecoratedBox(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            AppColors.backgroundLift,
-            AppColors.background,
-            AppColors.backgroundDeep,
-          ],
-          stops: [0.0, 0.5, 1.0],
+          colors: isLight
+              ? [
+                  AppColorsLight.backgroundLift,
+                  AppColorsLight.background,
+                  AppColorsLight.backgroundDeep,
+                ]
+              : [
+                  AppColors.backgroundLift,
+                  AppColors.background,
+                  AppColors.backgroundDeep,
+                ],
+          stops: const [0.0, 0.5, 1.0],
         ),
       ),
       child: child,
@@ -238,10 +280,14 @@ class FixEaseStepBackButton extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.arrow_back_ios_new_rounded,
               size: 16,
-              color: AppColors.textSecondary,
+              color: fxColor(
+                context,
+                dark: AppColors.textSecondary,
+                light: AppColorsLight.textSecondary,
+              ),
             ),
             const SizedBox(width: 4),
             Text(
@@ -250,7 +296,11 @@ class FixEaseStepBackButton extends StatelessWidget {
                 fontSize: 14,
                 fontWeight: FontWeight.w400,
                 letterSpacing: -0.1,
-                color: AppColors.textSecondary,
+                color: fxColor(
+                  context,
+                  dark: AppColors.textSecondary,
+                  light: AppColorsLight.textSecondary,
+                ),
               ),
             ),
           ],

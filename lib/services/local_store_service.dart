@@ -10,6 +10,14 @@ abstract final class LocalStoreService {
     _prefs ??= await SharedPreferences.getInstance();
   }
 
+  static SharedPreferences get prefs {
+    final p = _prefs;
+    if (p == null) {
+      throw StateError('LocalStoreService.init() must be called first');
+    }
+    return p;
+  }
+
   static List<Map<String, dynamic>> readJsonList(String key) {
     final raw = _prefs?.getString(key);
     if (raw == null || raw.isEmpty) return const [];

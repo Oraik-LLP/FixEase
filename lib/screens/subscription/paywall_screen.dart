@@ -6,6 +6,7 @@ import '../../config/app_config.dart';
 import '../../services/review_prompt_service.dart';
 import '../../services/subscription_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/demo_subscription_card.dart';
 import '../../widgets/neuomorphic.dart';
 
 class PaywallScreen extends StatefulWidget {
@@ -85,7 +86,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
                           ),
                           if (AppConfig.isDemoMode) ...[
                             const SizedBox(height: 18),
-                            _DemoModeCard(
+                            DemoSubscriptionCard(
                               state: service.demoState,
                               onChanged: service.setDemoState,
                             ),
@@ -276,64 +277,6 @@ class _PaywallHero extends StatelessWidget {
       ),
     );
   }
-}
-
-class _DemoModeCard extends StatelessWidget {
-  const _DemoModeCard({
-    required this.state,
-    required this.onChanged,
-  });
-
-  final DemoSubscriptionState state;
-  final Future<void> Function(DemoSubscriptionState state) onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
-    return NeuPane(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Demo Toggle', style: tt.titleMedium),
-          const SizedBox(height: 6),
-          Text(
-            'Switch mock entitlement states instantly to test every gate in the app.',
-            style: tt.bodySmall,
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              for (final option in DemoSubscriptionState.values)
-                ChoiceChip(
-                  label: Text(_label(option)),
-                  selected: option == state,
-                  onSelected: (_) {
-                    onChanged(option);
-                  },
-                  selectedColor: AppColors.accent.withValues(alpha: 0.16),
-                  backgroundColor:
-                      AppColors.surfaceHighlight.withValues(alpha: 0.35),
-                  labelStyle: tt.bodySmall?.copyWith(
-                    color: option == state
-                        ? AppColors.accent
-                        : AppColors.textPrimary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _label(DemoSubscriptionState state) => switch (state) {
-        DemoSubscriptionState.mockFree => 'Mock_Free',
-        DemoSubscriptionState.mockPass => 'Mock_Pass',
-        DemoSubscriptionState.mockPro => 'Mock_Pro',
-      };
 }
 
 class _PlanCard extends StatelessWidget {

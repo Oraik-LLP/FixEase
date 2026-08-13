@@ -10,6 +10,8 @@ import 'package:printing/printing.dart';
 
 import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
+import '../models/obd.dart';
+import 'obd_pdf_sections.dart';
 
 /// Builds and exports diagnostic reports as PDFs.
 abstract final class ReportExportService {
@@ -79,16 +81,24 @@ abstract final class ReportExportService {
     final pdf = pw.Document();
     final isUrgent = session.type == DiagnosticType.urgent;
     final isInvoiceAudit = session.type == DiagnosticType.invoiceAudit;
-    final reportTitle = isUrgent
-        ? 'Urgent Diagnosis Report'
-        : isInvoiceAudit
-            ? 'Invoice Audit Report'
-            : 'Photo Diagnosis Report';
-    final typeLabel = isUrgent
-        ? 'Urgent'
-        : isInvoiceAudit
-            ? 'Invoice Audit'
-            : 'Photo';
+    final isObd = session.isObd;
+    final obdRecord = _obdRecordFromSession(session);
+    final reportTitle = isObd
+        ? (session.type == DiagnosticType.obdDrive
+            ? 'OBD Drive Scan Report'
+            : 'OBD Idle Scan Report')
+        : isUrgent
+            ? 'Urgent Diagnosis Report'
+            : isInvoiceAudit
+                ? 'Invoice Audit Report'
+                : 'Photo Diagnosis Report';
+    final typeLabel = isObd
+        ? (session.type == DiagnosticType.obdDrive ? 'OBD Drive' : 'OBD Idle')
+        : isUrgent
+            ? 'Urgent'
+            : isInvoiceAudit
+                ? 'Invoice Audit'
+                : 'Photo';
 
     pdf.addPage(
       pw.MultiPage(
@@ -318,6 +328,7 @@ abstract final class ReportExportService {
                       ))
                   .toList(),
             ),
+          if (isObd && obdRecord != null) ...ObdPdfSections.build(obdRecord),
           pw.SizedBox(height: 26),
           pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -338,6 +349,16 @@ abstract final class ReportExportService {
     );
 
     return pdf;
+  }
+
+  static ObdScanRecord? _obdRecordFromSession(DiagnosticSession session) {
+    final recordJson = session.contextJson?['obd_record'];
+    if (recordJson is! Map) return null;
+    try {
+      return ObdScanRecord.fromJson(Map<String, dynamic>.from(recordJson));
+    } catch (_) {
+      return null;
+    }
   }
 
   static pw.Widget _metricChip(String label, String value) {

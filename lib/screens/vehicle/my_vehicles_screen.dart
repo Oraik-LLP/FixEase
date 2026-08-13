@@ -152,7 +152,8 @@ class _VehicleCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(vehicle.displayName,
-                            style: tt.titleLarge, maxLines: 1,
+                            style: tt.titleLarge,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis),
                       ),
                       if (isSelected)
@@ -174,6 +175,10 @@ class _VehicleCard extends StatelessWidget {
                     '${vehicle.fuelLabel} · ${vehicle.mileageKm > 0 ? '${vehicle.mileageKm} km' : 'No mileage'}',
                     style: tt.bodyMedium,
                   ),
+                  if (vehicle.maskedVin != null) ...[
+                    const SizedBox(height: 2),
+                    Text('VIN ${vehicle.maskedVin}', style: tt.bodySmall),
+                  ],
                 ],
               ),
             ),

@@ -1503,7 +1503,7 @@ Future<bool?> _showBetaDialog(BuildContext context) {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       title: Row(
         children: [
-          const Icon(Icons.science_rounded, color: AppColors.accent, size: 22),
+          Icon(Icons.science_rounded, color: AppColors.accent, size: 22),
           const SizedBox(width: 8),
           Text('Beta Feature', style: Theme.of(ctx).textTheme.titleLarge),
         ],
@@ -1535,7 +1535,7 @@ Future<bool?> _showBetaDialog(BuildContext context) {
             Navigator.pop(ctx, true);
           },
           child:
-              const Text('Opt In', style: TextStyle(color: AppColors.accent)),
+              Text('Opt In', style: TextStyle(color: AppColors.accent)),
         ),
       ],
     ),

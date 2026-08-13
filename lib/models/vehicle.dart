@@ -1,3 +1,7 @@
+import '../utils/vin_utils.dart';
+
+import '../utils/enum_utils.dart';
+
 enum FuelType { petrol, diesel, cng, electric, hybrid }
 
 class Vehicle {
@@ -7,6 +11,7 @@ class Vehicle {
     required this.model,
     required this.year,
     this.variant,
+    this.vin,
     this.fuelType = FuelType.petrol,
     this.mileageKm = 0,
     this.lastServiceDate,
@@ -20,6 +25,7 @@ class Vehicle {
   final String model;
   final int year;
   final String? variant;
+  final String? vin;
   final FuelType fuelType;
   final int mileageKm;
   final DateTime? lastServiceDate;
@@ -28,6 +34,13 @@ class Vehicle {
   final DateTime createdAt;
 
   String get displayName => '$year $make $model${variant != null ? ' $variant' : ''}';
+
+  /// Masked VIN for display — only last 4 characters visible.
+  String? get maskedVin {
+    final value = vin;
+    if (value == null || value.isEmpty) return null;
+    return VinUtils.maskDisplay(value);
+  }
 
   String get fuelLabel => switch (fuelType) {
         FuelType.petrol => 'Petrol',
@@ -43,6 +56,7 @@ class Vehicle {
         'model': model,
         'year': year,
         'variant': variant,
+        'vin': vin,
         'fuel_type': fuelType.name,
         'mileage_km': mileageKm,
         'last_service_date': lastServiceDate?.toIso8601String(),
@@ -57,7 +71,12 @@ class Vehicle {
         model: j['model'] as String,
         year: j['year'] as int,
         variant: j['variant'] as String?,
-        fuelType: FuelType.values.byName(j['fuel_type'] as String? ?? 'petrol'),
+        vin: j['vin'] as String?,
+        fuelType: enumByName(
+          FuelType.values,
+          j['fuel_type'] as String?,
+          FuelType.petrol,
+        ),
         mileageKm: j['mileage_km'] as int? ?? 0,
         lastServiceDate: j['last_service_date'] != null
             ? DateTime.tryParse(j['last_service_date'] as String)
@@ -73,6 +92,7 @@ class Vehicle {
     String? model,
     int? year,
     String? variant,
+    String? vin,
     FuelType? fuelType,
     int? mileageKm,
     DateTime? lastServiceDate,
@@ -84,6 +104,7 @@ class Vehicle {
         model: model ?? this.model,
         year: year ?? this.year,
         variant: variant ?? this.variant,
+        vin: vin ?? this.vin,
         fuelType: fuelType ?? this.fuelType,
         mileageKm: mileageKm ?? this.mileageKm,
         lastServiceDate: lastServiceDate ?? this.lastServiceDate,

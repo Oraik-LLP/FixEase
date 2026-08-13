@@ -10,6 +10,7 @@ import '../models/diagnostic.dart';
 import '../services/diagnostic_service.dart';
 import '../services/report_export_service.dart';
 import '../services/subscription_service.dart';
+import '../services/theme_service.dart';
 import '../theme/app_theme.dart';
 
 class ReportExportButton extends StatefulWidget {
@@ -90,7 +91,7 @@ class _ReportExportButtonState extends State<ReportExportButton> {
     HapticFeedback.selectionClick();
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.surface,
+      backgroundColor: FxColors.surface(context),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -165,7 +166,7 @@ class _ReportExportButtonState extends State<ReportExportButton> {
           SnackBar(
             content: Text(
               'PDF saved successfully: ${result.uri.pathSegments.last}',
-              style: const TextStyle(color: AppColors.textPrimary),
+              style: TextStyle(color: AppColors.textPrimary),
             ),
             backgroundColor: AppColors.surface,
             behavior: SnackBarBehavior.floating,
@@ -218,15 +219,15 @@ class _ExportActionTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            color: AppColors.surfaceHighlight.withValues(alpha: 0.45),
+            color: FxColors.surfaceHighlight(context).withValues(alpha: 0.45),
             border: Border.all(
-              color: const Color(0x10FFFFFF),
+              color: FxColors.borderSubtle(context),
               width: 0.6,
             ),
           ),
           child: Row(
             children: [
-              Icon(icon, color: AppColors.accent, size: 20),
+              Icon(icon, color: FxColors.accent(context), size: 20),
               const SizedBox(width: 12),
               Text(label, style: Theme.of(context).textTheme.titleMedium),
             ],

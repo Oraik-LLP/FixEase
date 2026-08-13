@@ -1,3 +1,5 @@
+import '../utils/enum_utils.dart';
+
 enum ObdSuiteState {
   disconnected,
   connecting,
@@ -279,8 +281,10 @@ class ObdProcessedScan {
 
   factory ObdProcessedScan.fromJson(Map<String, dynamic> json) {
     return ObdProcessedScan(
-      kind: ObdScanKind.values.byName(
-        json['kind'] as String? ?? ObdScanKind.idle.name,
+      kind: enumByName(
+        ObdScanKind.values,
+        json['kind'] as String?,
+        ObdScanKind.idle,
       ),
       idleStats: (json['idle_stats'] as Map? ?? const <String, dynamic>{}).map(
         (key, value) => MapEntry(
@@ -342,13 +346,16 @@ class ObdScanRecord {
 
   factory ObdScanRecord.fromJson(Map<String, dynamic> json) {
     return ObdScanRecord(
-      kind: ObdScanKind.values.byName(
-        json['kind'] as String? ?? ObdScanKind.idle.name,
+      kind: enumByName(
+        ObdScanKind.values,
+        json['kind'] as String?,
+        ObdScanKind.idle,
       ),
       isPartial: json['is_partial'] as bool? ?? false,
-      completionReason: ObdCompletionReason.values.byName(
-        json['completion_reason'] as String? ??
-            ObdCompletionReason.completed.name,
+      completionReason: enumByName(
+        ObdCompletionReason.values,
+        json['completion_reason'] as String?,
+        ObdCompletionReason.completed,
       ),
       targetDurationSeconds:
           (json['target_duration_seconds'] as num?)?.toInt() ?? 0,
@@ -404,8 +411,10 @@ class ObdInsightRecord {
   factory ObdInsightRecord.fromJson(Map<String, dynamic> json) {
     return ObdInsightRecord(
       vehicleId: json['vehicle_id'] as String? ?? '',
-      kind: ObdScanKind.values.byName(
-        json['kind'] as String? ?? ObdScanKind.idle.name,
+      kind: enumByName(
+        ObdScanKind.values,
+        json['kind'] as String?,
+        ObdScanKind.idle,
       ),
       sessionId: json['session_id'] as String? ?? '',
       summary: json['summary'] as String? ?? '',

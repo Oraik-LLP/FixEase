@@ -14,6 +14,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/app_markdown_text.dart';
 import '../../widgets/health_score_card.dart';
 import '../../widgets/neuomorphic.dart';
+import '../tools/dtc_lookup_screen.dart';
 import '../../widgets/report_export_button.dart';
 
 ObdScanRecord? _obdRecordFromSession(DiagnosticSession session) {
@@ -178,10 +179,18 @@ class _ObdStaticSnapshotSection extends StatelessWidget {
           const SizedBox(height: 10),
           if (snapshot.vin?.trim().isNotEmpty == true)
             _MetaRow('VIN', snapshot.vin!.trim()),
-          if (snapshot.storedDtcs.isNotEmpty)
-            _MetaRow('Stored DTCs', snapshot.storedDtcs.join(', ')),
-          if (snapshot.pendingDtcs.isNotEmpty)
-            _MetaRow('Pending DTCs', snapshot.pendingDtcs.join(', ')),
+          if (snapshot.storedDtcs.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Stored DTCs', style: tt.titleMedium),
+            const SizedBox(height: 6),
+            DtcCodeList(codes: snapshot.storedDtcs),
+          ],
+          if (snapshot.pendingDtcs.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Pending DTCs', style: tt.titleMedium),
+            const SizedBox(height: 6),
+            DtcCodeList(codes: snapshot.pendingDtcs),
+          ],
           if (snapshot.controlModuleVoltage != null)
             _MetaRow(
               'Module Voltage',

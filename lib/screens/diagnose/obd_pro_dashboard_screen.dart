@@ -9,6 +9,7 @@ import '../../services/obd_pro_service.dart';
 import '../../services/subscription_service.dart';
 import '../../services/vehicle_service.dart';
 import '../../theme/app_theme.dart';
+import '../../screens/tools/dtc_lookup_screen.dart';
 import '../../widgets/neuomorphic.dart';
 import '../reports/report_detail_screen.dart';
 
@@ -424,18 +425,6 @@ class _StaticSnapshotCard extends StatelessWidget {
                 value: snapshot.vin ?? '--',
               ),
               _SnapshotPill(
-                label: 'Stored DTCs',
-                value: snapshot.storedDtcs.isEmpty
-                    ? '0'
-                    : snapshot.storedDtcs.join(', '),
-              ),
-              _SnapshotPill(
-                label: 'Pending DTCs',
-                value: snapshot.pendingDtcs.isEmpty
-                    ? '0'
-                    : snapshot.pendingDtcs.join(', '),
-              ),
-              _SnapshotPill(
                 label: 'Battery',
                 value: snapshot.controlModuleVoltage == null
                     ? '--'
@@ -454,6 +443,33 @@ class _StaticSnapshotCard extends StatelessWidget {
                     : '${snapshot.ambientAirTempC!.toStringAsFixed(0)} C',
               ),
             ],
+          ),
+          if (snapshot.storedDtcs.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text('Stored DTCs', style: tt.titleMedium),
+            const SizedBox(height: 8),
+            DtcCodeList(codes: snapshot.storedDtcs),
+          ],
+          if (snapshot.pendingDtcs.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text('Pending DTCs', style: tt.titleMedium),
+            const SizedBox(height: 8),
+            DtcCodeList(codes: snapshot.pendingDtcs),
+          ],
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const DtcLookupScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.search_rounded, size: 18),
+              label: const Text('Lookup any code'),
+            ),
           ),
         ],
       ),

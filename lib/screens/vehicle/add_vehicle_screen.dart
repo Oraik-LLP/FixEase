@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/vehicle.dart';
 import '../../services/vehicle_service.dart';
+import '../../services/vehicle_sync_service.dart';
+import '../../services/theme_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/vin_utils.dart';
 import '../../widgets/neuomorphic.dart';
 
 class AddVehicleScreen extends StatefulWidget {
@@ -22,20 +27,25 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
   String _variant = '';
   FuelType _fuel = FuelType.petrol;
   final _mileageCtrl = TextEditingController();
+  final _vinCtrl = TextEditingController();
   DateTime? _lastService;
+  bool _saving = false;
+
+  static const _totalSteps = 5;
 
   bool get _canProceed => switch (_step) {
         0 => _make != null,
         1 => _model != null,
         2 => _year != null,
         3 => true,
-        _ => true,
+        4 => VinUtils.isValid(_vinCtrl.text),
+        _ => false,
       };
 
   void _next() {
-    if (!_canProceed) return;
+    if (!_canProceed || _saving) return;
     HapticFeedback.selectionClick();
-    if (_step < 3) {
+    if (_step < _totalSteps - 1) {
       setState(() => _step++);
     } else {
       _save();
@@ -53,6 +63,7 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
 
   Future<void> _pickServiceDate() async {
     final now = DateTime.now();
+    final isLight = Theme.of(context).brightness == Brightness.light;
     final picked = await showDatePicker(
       context: context,
       initialDate: _lastService ?? now,
@@ -60,13 +71,21 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
       lastDate: now,
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.dark(
-            primary: AppColors.accent,
-            surface: AppColors.surface,
-            onSurface: AppColors.textPrimary,
-          ),
+          colorScheme: isLight
+              ? ColorScheme.light(
+                  primary: AppColorsLight.accent,
+                  surface: AppColorsLight.surface,
+                  onSurface: AppColorsLight.textPrimary,
+                )
+              : const ColorScheme.dark(
+                  primary: AppColors.accent,
+                  surface: AppColors.surface,
+                  onSurface: AppColors.textPrimary,
+                ),
           dialogTheme: DialogThemeData(
-            backgroundColor: AppColors.background,
+            backgroundColor: isLight
+                ? AppColorsLight.background
+                : AppColors.background,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
           ),
@@ -77,19 +96,59 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
     if (picked != null) setState(() => _lastService = picked);
   }
 
-  void _save() {
+  Future<void> _save() async {
+    if (_saving) return;
+    final vinError = VinUtils.validationMessage(_vinCtrl.text);
+    if (vinError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(vinError)),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
     final km = int.tryParse(_mileageCtrl.text.replaceAll(',', '')) ?? 0;
+    final vin = VinUtils.normalize(_vinCtrl.text);
     final vehicle = Vehicle(
       id: DateTime.now().microsecondsSinceEpoch.toRadixString(36),
       make: _make!,
       model: _model!,
       year: _year!,
       variant: _variant.isNotEmpty ? _variant : null,
+      vin: vin,
       fuelType: _fuel,
       mileageKm: km,
       lastServiceDate: _lastService,
     );
-    VehicleService.instance.add(vehicle);
+
+    await VehicleService.instance.add(vehicle);
+
+    VehicleSyncResult? sync;
+    try {
+      sync = await VehicleSyncService.saveVehicle(vehicle);
+    } on TimeoutException {
+      sync = const VehicleSyncResult(
+        errorMessage: 'Cloud sync timed out — saved on device',
+      );
+    } catch (_) {
+      sync = const VehicleSyncResult(
+        errorMessage: 'Cloud sync failed — saved on device',
+      );
+    }
+
+    if (!mounted) return;
+    setState(() => _saving = false);
+
+    if (!sync.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Vehicle saved on device — cloud sync failed: ${sync.errorMessage}',
+          ),
+        ),
+      );
+    }
+
     HapticFeedback.heavyImpact();
     Navigator.of(context).pop(vehicle);
   }
@@ -97,6 +156,7 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
   @override
   void dispose() {
     _mileageCtrl.dispose();
+    _vinCtrl.dispose();
     super.dispose();
   }
 
@@ -118,7 +178,7 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
                     FixEaseStepBackButton(onPressed: _back),
                     const Spacer(),
                     Text(
-                      'Step ${_step + 1} of 4',
+                      'Step ${_step + 1} of $_totalSteps',
                       style: tt.bodySmall,
                     ),
                   ],
@@ -132,7 +192,7 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(3),
                   child: LinearProgressIndicator(
-                    value: (_step + 1) / 4,
+                    value: (_step + 1) / _totalSteps,
                     minHeight: 4,
                     backgroundColor: AppColors.surfaceHighlight,
                     color: AppColors.accent,
@@ -155,8 +215,12 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: NeuPrimaryButton(
-                  label: _step == 3 ? 'Save Vehicle' : 'Continue',
-                  onPressed: _canProceed ? _next : null,
+                  label: _saving
+                      ? 'Saving…'
+                      : _step == _totalSteps - 1
+                          ? 'Save Vehicle'
+                          : 'Continue',
+                  onPressed: _canProceed && !_saving ? _next : null,
                 ),
               ),
             ],
@@ -190,7 +254,7 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
           onSelect: (v) => setState(() => _year = v),
           tt: tt,
         ),
-      _ => _StepDetails(
+      3 => _StepDetails(
           key: const ValueKey('details'),
           variant: _variant,
           fuel: _fuel,
@@ -199,6 +263,18 @@ class _AddVehicleScreenState extends State<AddVehicleScreen> {
           onVariant: (v) => setState(() => _variant = v),
           onFuel: (v) => setState(() => _fuel = v),
           onPickDate: _pickServiceDate,
+          tt: tt,
+        ),
+      _ => _StepVin(
+          key: const ValueKey('vin'),
+          vinCtrl: _vinCtrl,
+          summary: [
+            if (_year != null) '$_year',
+            if (_make != null) _make!,
+            if (_model != null) _model!,
+            if (_variant.isNotEmpty) _variant,
+          ].join(' '),
+          onChanged: () => setState(() {}),
           tt: tt,
         ),
     };
@@ -459,6 +535,76 @@ class _StepDetails extends StatelessWidget {
   }
 }
 
+// ── Step 5: VIN (required, last step) ───────────────────────────────────────
+
+class _StepVin extends StatelessWidget {
+  const _StepVin({
+    super.key,
+    required this.vinCtrl,
+    required this.summary,
+    required this.onChanged,
+    required this.tt,
+  });
+
+  final TextEditingController vinCtrl;
+  final String summary;
+  final VoidCallback onChanged;
+  final TextTheme tt;
+
+  @override
+  Widget build(BuildContext context) {
+    final vin = VinUtils.normalize(vinCtrl.text);
+    final error = vin.isEmpty ? null : VinUtils.validationMessage(vinCtrl.text);
+    final preview = vin.length >= 4 ? VinUtils.maskDisplay(vin) : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Enter VIN', style: tt.headlineMedium),
+        const SizedBox(height: 6),
+        Text(
+          'Last step — enter your 17-character VIN to finish saving this vehicle.',
+          style: tt.bodyMedium,
+        ),
+        if (summary.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          NeuPane(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                const Icon(Icons.directions_car_rounded,
+                    color: AppColors.accent, size: 20),
+                const SizedBox(width: 10),
+                Expanded(child: Text(summary, style: tt.titleMedium)),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 18),
+        NeuTextField(
+          hint: '17-character VIN',
+          icon: Icons.tag_rounded,
+          controller: vinCtrl,
+          onChanged: (_) => onChanged(),
+        ),
+        if (preview != null) ...[
+          const SizedBox(height: 10),
+          Text('Stored as: $preview', style: tt.bodySmall),
+        ],
+        if (error != null) ...[
+          const SizedBox(height: 8),
+          Text(error, style: tt.bodySmall?.copyWith(color: const Color(0xFFFFB74D))),
+        ],
+        const SizedBox(height: 12),
+        Text(
+          'Your full VIN is saved securely. Only the last 4 digits are shown in the app.',
+          style: tt.bodySmall?.copyWith(color: AppColors.textTertiary),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Shared chip widget ──────────────────────────────────────────────────────
 
 class _ChipButton extends StatelessWidget {
@@ -473,6 +619,7 @@ class _ChipButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = FxColors.accent(context);
     return GestureDetector(
       onTap: () {
         HapticFeedback.selectionClick();
@@ -484,19 +631,19 @@ class _ChipButton extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           color: selected
-              ? AppColors.accent.withValues(alpha: 0.18)
-              : AppColors.surface,
+              ? accent.withValues(alpha: 0.18)
+              : FxColors.surface(context),
           border: Border.all(
             color: selected
-                ? AppColors.accent.withValues(alpha: 0.5)
-                : const Color(0x0CFFFFFF),
+                ? accent.withValues(alpha: 0.5)
+                : FxColors.borderSubtle(context),
             width: selected ? 1 : 0.5,
           ),
         ),
         child: Text(
           label,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: selected ? AppColors.accent : AppColors.textPrimary,
+                color: selected ? accent : FxColors.textPrimary(context),
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
               ),
         ),

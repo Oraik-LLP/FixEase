@@ -10,6 +10,8 @@ import {
   initializeQuotaStore,
   resetDiagnosticQuota,
 } from './quota_store.js';
+import { registerMechanicRoutes } from './mechanic_routes.js';
+import { registerConsumerVehicleRoutes } from './consumer_vehicle_routes.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -258,7 +260,8 @@ app.post('/api/diagnose/symptoms', diagnosisGate, async (req, res) => {
   try {
     await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, symptoms = [], severity = 'medium', description } = req.body ?? {};
-    const prompt = buildSymptomPrompt({ vehicle, symptoms, severity, description });
+    const reportLanguage = resolveReportLanguage(req.body);
+    const prompt = buildSymptomPrompt({ vehicle, symptoms, severity, description, reportLanguage });
     const text = await generateText({
       model: diagnosisModel,
       prompt,
@@ -276,11 +279,12 @@ app.post('/api/diagnose/photos', diagnosisGate, async (req, res) => {
   try {
     await ensureDiagnosticQuotaAllowed(req);
     const { vehicle, images = [], description, obd_context } = req.body ?? {};
+    const reportLanguage = resolveReportLanguage(req.body);
     const contents = [
       {
         role: 'user',
         parts: [
-          { text: buildPhotoPrompt({ vehicle, description, obdContext: obd_context }) },
+          { text: buildPhotoPrompt({ vehicle, description, obdContext: obd_context, reportLanguage }) },
           ...images
             .filter((image) => image?.data && image?.mime_type)
             .slice(0, 8)
@@ -309,11 +313,12 @@ app.post('/api/diagnose/photos', diagnosisGate, async (req, res) => {
 app.post('/api/diagnose/invoice-audit', diagnosisGate, async (req, res) => {
   try {
     const { vehicle, documents = [], purpose } = req.body ?? {};
+    const reportLanguage = resolveReportLanguage(req.body);
     const contents = [
       {
         role: 'user',
         parts: [
-          { text: buildInvoiceAuditPrompt({ vehicle, purpose }) },
+          { text: buildInvoiceAuditPrompt({ vehicle, purpose, reportLanguage }) },
           ...documents
             .filter((document) => document?.data && document?.mime_type)
             .slice(0, 4)
@@ -350,6 +355,7 @@ app.post('/api/diagnose/obd-pro', diagnosisGate, async (req, res) => {
       static_snapshot = {},
       processed_scan = {},
     } = req.body ?? {};
+    const reportLanguage = resolveReportLanguage(req.body);
     const prompt = buildObdProPrompt({
       vehicle,
       mode,
@@ -359,6 +365,7 @@ app.post('/api/diagnose/obd-pro', diagnosisGate, async (req, res) => {
       capturedDurationSeconds: captured_duration_seconds,
       staticSnapshot: static_snapshot,
       processedScan: processed_scan,
+      reportLanguage,
     });
     const text = await generateText({
       model: diagnosisModel,
@@ -694,11 +701,29 @@ function stripCodeFences(text) {
   return cleaned;
 }
 
-function buildSymptomPrompt({ vehicle, symptoms, severity, description }) {
+function resolveReportLanguage(body) {
+  const lang = String(body?.report_language || 'en').trim().toLowerCase();
+  return lang === 'hi' ? 'hi' : 'en';
+}
+
+function reportLanguageRules(reportLanguage) {
+  if (reportLanguage !== 'hi') {
+    return '';
+  }
+  return `
+
+REPORT LANGUAGE (Hindi/Hinglish):
+- Write summary, possible_causes, recommendations, urgency_note, suggested_question, verdict, top_flags, line_item_audit.reason, and questions_toAsk in natural Hindi/Hinglish (Hindi mixed with common English automotive terms Indian drivers use).
+- Keep mechanic_script and JSON keys in English.
+- Do not translate DTC codes, part numbers, or currency symbols.`;
+}
+
+function buildSymptomPrompt({ vehicle, symptoms, severity, description, reportLanguage = 'en' }) {
   return `${buildDiagnosticSystemPrompt({
     vehicle,
     mode: 'symptom',
     subjectLabel: 'reported symptoms',
+    reportLanguage,
     schemaJson: `{
   "summary": "One short empathy sentence first, then 1-2 factual technical sentences.",
   "health_score": 0,
@@ -724,11 +749,12 @@ DIAGNOSTIC FOCUS:
 - Keep the mechanic_script authoritative and workshop-grade. Reference likely DTC families, scan-tool checks, manufacturer-spec comparisons, backlash/play, fluid condition, wear limits in mm, and electrical ranges when appropriate.`;
 }
 
-function buildPhotoPrompt({ vehicle, description, obdContext }) {
+function buildPhotoPrompt({ vehicle, description, obdContext, reportLanguage = 'en' }) {
   return `${buildDiagnosticSystemPrompt({
     vehicle,
     mode: 'photo',
     subjectLabel: 'attached vehicle photos',
+    reportLanguage,
     schemaJson: `{
   "summary": "One short empathy sentence first, then 1-2 factual visual findings sentences.",
   "health_score": 0,
@@ -770,11 +796,13 @@ function buildObdProPrompt({
   capturedDurationSeconds,
   staticSnapshot,
   processedScan,
+  reportLanguage = 'en',
 }) {
   return `${buildDiagnosticSystemPrompt({
     vehicle,
     mode: `obd_${mode}`,
     subjectLabel: 'processed OBD2 telemetry and static ECU data',
+    reportLanguage,
     schemaJson: `{
   "summary": "One short empathy sentence first, then 1-2 factual technical sentences.",
   "health_score": 0,
@@ -808,8 +836,9 @@ OBD ANALYSIS RULES:
 - Keep the mechanic_script workshop-grade and tied to likely live-data verification steps.`;
 }
 
-function buildInvoiceAuditPrompt({ vehicle, purpose }) {
+function buildInvoiceAuditPrompt({ vehicle, purpose, reportLanguage = 'en' }) {
   return `You are an automotive invoice auditor specializing in repair-bill fraud signals, upsells, redundant labor, and pricing anomalies.
+${reportLanguageRules(reportLanguage)}
 
 Your task is to review an uploaded mechanic invoice, dealership service bill, workshop estimate, repair quote, or mixed repair document. Extract the bill contents and audit whether the charges appear fair, inflated, redundant, vague, or unnecessary.
 
@@ -886,8 +915,9 @@ Return ONLY a JSON object with this exact structure:
 }`;
 }
 
-function buildDiagnosticSystemPrompt({ vehicle, mode, subjectLabel, schemaJson }) {
+function buildDiagnosticSystemPrompt({ vehicle, mode, subjectLabel, schemaJson, reportLanguage = 'en' }) {
   return `You are FixEase, a senior automotive diagnostic AI producing a structured report for a stressed everyday driver.
+${reportLanguageRules(reportLanguage)}
 
 MISSION:
 - Analyze the ${subjectLabel}.
@@ -1251,6 +1281,14 @@ process.on('unhandledRejection', (reason) => {
 });
 
 await initializeQuotaStore();
+
+registerMechanicRoutes(app, {
+  aiClient,
+  diagnosisModel,
+  generateContent,
+});
+
+registerConsumerVehicleRoutes(app);
 
 httpServer.listen(port, '0.0.0.0', () => {
   console.log(`FixEase AI backend listening on http://0.0.0.0:${port}`);

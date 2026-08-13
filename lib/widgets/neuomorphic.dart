@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
+import '../services/theme_service.dart';
 
 // ---------------------------------------------------------------------------
 // Shadow system: subtle dark-glass style from Cybertruck reference.
@@ -59,13 +60,21 @@ class NeuPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final surface = fxColor(
+      context,
+      dark: AppColors.surface,
+      light: AppColorsLight.surface,
+    );
+    final borderColor = Theme.of(context).brightness == Brightness.light
+        ? const Color(0x14000000)
+        : const Color(0x0CFFFFFF);
     return Container(
       width: double.infinity,
       padding: padding,
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: surface,
         borderRadius: BorderRadius.circular(borderRadius),
-        border: Border.all(color: const Color(0x0CFFFFFF), width: 0.5),
+        border: Border.all(color: borderColor, width: 0.5),
         boxShadow: _panelShadows(i: intensity),
       ),
       child: child,
@@ -172,8 +181,8 @@ class NeuSecondaryButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 22),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(26),
-          color: AppColors.surface,
-          border: Border.all(color: const Color(0x0CFFFFFF), width: 0.5),
+          color: FxColors.surface(context),
+          border: Border.all(color: FxColors.borderSubtle(context), width: 0.5),
           boxShadow: _panelShadows(i: 0.6),
         ),
         child: Row(
@@ -181,7 +190,7 @@ class NeuSecondaryButton extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (icon != null) ...[
-              Icon(icon, size: 18, color: AppColors.textSecondary),
+              Icon(icon, size: 18, color: FxColors.textSecondary(context)),
               const SizedBox(width: 7),
             ],
             Text(
@@ -189,7 +198,7 @@ class NeuSecondaryButton extends StatelessWidget {
               style: Theme.of(context)
                   .textTheme
                   .labelLarge
-                  ?.copyWith(color: AppColors.textPrimary),
+                  ?.copyWith(color: FxColors.textPrimary(context)),
             ),
           ],
         ),
@@ -230,8 +239,8 @@ class _NeuIconButtonState extends State<NeuIconButton> {
   Widget build(BuildContext context) {
     final isActive = _pressed || widget.selected;
     final fg = widget.selected
-        ? AppColors.accent
-        : (widget.color ?? AppColors.textSecondary);
+        ? FxColors.accent(context)
+        : (widget.color ?? FxColors.textSecondary(context));
 
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
@@ -248,12 +257,12 @@ class _NeuIconButtonState extends State<NeuIconButton> {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: widget.selected
-              ? AppColors.accent.withValues(alpha: 0.15)
-              : AppColors.surface,
+              ? FxColors.accent(context).withValues(alpha: 0.15)
+              : FxColors.surface(context),
           border: Border.all(
             color: widget.selected
-                ? AppColors.accent.withValues(alpha: 0.35)
-                : const Color(0x0AFFFFFF),
+                ? FxColors.accent(context).withValues(alpha: 0.35)
+                : FxColors.borderSubtle(context),
             width: 0.5,
           ),
           boxShadow: isActive ? _insetShadows(i: 0.7) : _panelShadows(i: 0.5),
@@ -309,8 +318,8 @@ class NeuTextField extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
-        color: AppColors.surface,
-        border: Border.all(color: const Color(0x08FFFFFF), width: 0.5),
+        color: FxColors.surface(context),
+        border: Border.all(color: FxColors.borderSubtle(context), width: 0.5),
         boxShadow: _insetShadows(i: 0.7),
       ),
       child: TextField(
@@ -327,18 +336,20 @@ class NeuTextField extends StatelessWidget {
         enabled: enabled,
         style: GoogleFonts.inter(
           fontSize: 13,
-          color: enabled ? AppColors.textPrimary : AppColors.textTertiary,
+          color: enabled
+              ? FxColors.textPrimary(context)
+              : FxColors.textTertiary(context),
           fontWeight: FontWeight.w400,
         ),
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: GoogleFonts.inter(
             fontSize: 13,
-            color: AppColors.textTertiary,
+            color: FxColors.textTertiary(context),
             fontWeight: FontWeight.w400,
           ),
           prefixIcon: icon != null
-              ? Icon(icon, size: 18, color: AppColors.textTertiary)
+              ? Icon(icon, size: 18, color: FxColors.textTertiary(context))
               : null,
           suffixIcon: trailing,
           border: InputBorder.none,
@@ -366,6 +377,7 @@ class NeuToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = FxColors.accent(context);
     return GestureDetector(
       onTap: () {
         HapticFeedback.lightImpact();
@@ -380,12 +392,12 @@ class NeuToggle extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           color: value
-              ? AppColors.accent.withValues(alpha: 0.2)
-              : AppColors.surface,
+              ? accent.withValues(alpha: 0.2)
+              : FxColors.surface(context),
           border: Border.all(
             color: value
-                ? AppColors.accent.withValues(alpha: 0.45)
-                : const Color(0x0AFFFFFF),
+                ? accent.withValues(alpha: 0.45)
+                : FxColors.borderSubtle(context),
             width: 0.5,
           ),
           boxShadow: _insetShadows(i: 0.5),
@@ -399,7 +411,7 @@ class NeuToggle extends StatelessWidget {
             height: 24,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: value ? AppColors.accent : AppColors.surfaceHighlight,
+              color: value ? accent : FxColors.surfaceHighlight(context),
               boxShadow: _panelShadows(i: 0.35),
             ),
           ),
@@ -429,13 +441,18 @@ class NeuProgressRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final surface = FxColors.surface(context);
+    final track = FxColors.surfaceHighlight(context);
+    final accent = FxColors.accent(context);
+    final labelColor = FxColors.textPrimary(context);
+
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: AppColors.surface,
-        border: Border.all(color: const Color(0x08FFFFFF), width: 0.5),
+        color: surface,
+        border: Border.all(color: FxColors.borderSubtle(context), width: 0.5),
         boxShadow: _panelShadows(i: 0.75),
       ),
       child: Padding(
@@ -447,8 +464,8 @@ class NeuProgressRing extends StatelessWidget {
               child: CustomPaint(
                 painter: _RingPainter(
                   progress: progress,
-                  trackColor: AppColors.surfaceHighlight,
-                  fillColor: AppColors.accent,
+                  trackColor: track,
+                  fillColor: accent,
                   strokeWidth: strokeWidth,
                 ),
               ),
@@ -459,7 +476,7 @@ class NeuProgressRing extends StatelessWidget {
                 fontSize: size * 0.17,
                 fontWeight: FontWeight.w700,
                 letterSpacing: -0.3,
-                color: AppColors.textPrimary,
+                color: labelColor,
               ),
             ),
           ],
@@ -619,8 +636,8 @@ class NeuDropdown<T> extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
-        color: AppColors.surface,
-        border: Border.all(color: const Color(0x08FFFFFF), width: 0.5),
+        color: FxColors.surface(context),
+        border: Border.all(color: FxColors.borderSubtle(context), width: 0.5),
         boxShadow: _panelShadows(i: 0.5),
       ),
       child: DropdownButtonHideUnderline(
@@ -636,18 +653,20 @@ class NeuDropdown<T> extends StatelessWidget {
               ? Text(
                   hint!,
                   style: GoogleFonts.inter(
-                      fontSize: 13, color: AppColors.textTertiary),
+                    fontSize: 13,
+                    color: FxColors.textTertiary(context),
+                  ),
                 )
               : null,
           style: GoogleFonts.inter(
             fontSize: 13,
-            color: AppColors.textPrimary,
+            color: FxColors.textPrimary(context),
             fontWeight: FontWeight.w400,
           ),
-          dropdownColor: AppColors.surface,
-          icon: const Icon(
+          dropdownColor: FxColors.surface(context),
+          icon: Icon(
             Icons.keyboard_arrow_down_rounded,
-            color: AppColors.textTertiary,
+            color: FxColors.textTertiary(context),
             size: 18,
           ),
         ),

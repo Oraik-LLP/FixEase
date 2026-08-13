@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:fixease/l10n/app_localizations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'config/app_config.dart';
@@ -17,22 +19,28 @@ import 'screens/reports/report_detail_screen.dart';
 import 'screens/subscription/paywall_screen.dart';
 import 'screens/vehicle/add_vehicle_screen.dart';
 import 'screens/vehicle/my_vehicles_screen.dart';
+import 'screens/tools/dtc_lookup_screen.dart';
 import 'services/car_image_service.dart';
 import 'services/conversation_service.dart';
 import 'services/diagnostic_service.dart';
 import 'services/garage_service.dart';
 import 'services/local_store_service.dart';
+import 'services/locale_service.dart';
 import 'services/obd_pro_service.dart';
 import 'services/quota_service.dart';
 import 'services/reminder_scheduler_service.dart';
 import 'services/subscription_service.dart';
+import 'services/theme_service.dart';
 import 'services/vehicle_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/demo_subscription_card.dart';
 import 'widgets/neuomorphic.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocalStoreService.init();
+  await ThemeService.instance.init();
+  await LocaleService.instance.init();
   try {
     await VehicleService.instance.load();
   } catch (_) {}
@@ -68,11 +76,26 @@ class FixEaseApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'FixEase',
-      theme: buildFixEaseTheme(),
-      home: const SplashScreen(),
+    return ListenableBuilder(
+      listenable: ThemeService.instance,
+      builder: (context, _) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'FixEase',
+          theme: buildFixEaseLightTheme(),
+          darkTheme: buildFixEaseTheme(),
+          themeMode: ThemeService.instance.mode,
+          locale: const Locale('en'),
+          localizationsDelegates: const [
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: const [Locale('en')],
+          home: const SplashScreen(),
+        );
+      },
     );
   }
 }
@@ -202,13 +225,6 @@ class AppShellState extends State<AppShell> {
     _refreshFreeCredits();
   }
 
-  static const List<String> _titles = [
-    'FixEase',
-    'Diagnose',
-    'Garage',
-    'Profile',
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -236,6 +252,13 @@ class AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final titles = [
+      l10n.appTitle,
+      l10n.navDiagnose,
+      l10n.navGarage,
+      l10n.navProfile,
+    ];
     return PopScope(
       canPop: _index == 0,
       onPopInvokedWithResult: (didPop, _) {
@@ -246,12 +269,12 @@ class AppShellState extends State<AppShell> {
         backgroundColor: Colors.transparent,
         appBar: AppBar(
           automaticallyImplyLeading: false,
-          title: Text(_titles[_index]),
+          title: Text(titles[_index]),
           actions: [
             if (_index != 3)
               IconButton(
                 icon: const Icon(Icons.person_outline_rounded),
-                tooltip: 'Profile',
+                tooltip: l10n.navProfile,
                 onPressed: () {
                   HapticFeedback.selectionClick();
                   switchTab(3);
@@ -278,15 +301,23 @@ class AppShellState extends State<AppShell> {
               HapticFeedback.selectionClick();
               switchTab(value);
             },
-            destinations: const [
+            destinations: [
               NavigationDestination(
-                  icon: Icon(Icons.home_rounded), label: 'Home'),
+                icon: const Icon(Icons.home_rounded),
+                label: l10n.navHome,
+              ),
               NavigationDestination(
-                  icon: Icon(Icons.support_rounded), label: 'Diagnose'),
+                icon: const Icon(Icons.support_rounded),
+                label: l10n.navDiagnose,
+              ),
               NavigationDestination(
-                  icon: Icon(Icons.garage_rounded), label: 'Garage'),
+                icon: const Icon(Icons.garage_rounded),
+                label: l10n.navGarage,
+              ),
               NavigationDestination(
-                  icon: Icon(Icons.person_rounded), label: 'Profile'),
+                icon: const Icon(Icons.person_rounded),
+                label: l10n.navProfile,
+              ),
             ],
           ),
         ),
@@ -344,18 +375,19 @@ class _HomeTabBodyState extends State<HomeTabBody> {
                   width: double.infinity,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(22),
-                    color: AppColors.surface,
+                    color: FxColors.surface(context),
                     border: Border.all(
-                      color: const Color(0x0CFFFFFF),
+                      color: FxColors.borderSubtle(context),
                       width: 0.5,
                     ),
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        AppColors.surface,
-                        AppColors.surfaceHighlight.withValues(alpha: 0.6),
-                        AppColors.surface,
+                        FxColors.surface(context),
+                        FxColors.surfaceHighlight(context)
+                            .withValues(alpha: 0.6),
+                        FxColors.surface(context),
                       ],
                     ),
                   ),
@@ -931,15 +963,25 @@ class _VehicleHero extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 vehicle.model,
-                style: tt.headlineLarge?.copyWith(fontSize: 24),
+                style: tt.headlineLarge?.copyWith(
+                  fontSize: 24,
+                  color: Colors.white,
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
               Text(
                 '${vehicle.year} · ${vehicle.fuelLabel} · ${vehicle.mileageKm} km',
-                style: tt.bodySmall,
+                style: tt.bodySmall?.copyWith(color: Colors.white70),
               ),
+              if (vehicle.maskedVin != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'VIN ${vehicle.maskedVin}',
+                  style: tt.bodySmall?.copyWith(color: Colors.white60),
+                ),
+              ],
             ],
           ),
         ),
@@ -1022,11 +1064,14 @@ class _EmptyHero extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('Welcome to FixEase', style: tt.headlineMedium),
+              Text(
+                'Welcome to FixEase',
+                style: tt.headlineMedium?.copyWith(color: Colors.white),
+              ),
               const SizedBox(height: 6),
               Text(
                 'Add your vehicle to start\nAI-powered diagnostics.',
-                style: tt.bodyMedium,
+                style: tt.bodyMedium?.copyWith(color: Colors.white70),
               ),
               const SizedBox(height: 16),
               NeuPrimaryButton(
@@ -1051,10 +1096,11 @@ class DiagnoseTabBody extends StatelessWidget {
   const DiagnoseTabBody({super.key});
 
   Future<void> _guardedLaunch(BuildContext context, Widget screen) async {
+    final l10n = AppLocalizations.of(context)!;
     final v = VehicleService.instance.selected;
     if (v == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add a vehicle first')),
+        SnackBar(content: Text(l10n.addVehicleFirst)),
       );
       return;
     }
@@ -1072,6 +1118,7 @@ class DiagnoseTabBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
@@ -1080,7 +1127,7 @@ class DiagnoseTabBody extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('Choose Diagnostic Mode', style: tt.headlineMedium),
+              Text(l10n.chooseDiagnosticMode, style: tt.headlineMedium),
               const Spacer(),
               ListenableBuilder(
                 listenable: Listenable.merge([
@@ -1115,20 +1162,15 @@ class DiagnoseTabBody extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            'Select how you\'d like to diagnose your vehicle.',
-            style: tt.bodyMedium,
-          ),
+          Text(l10n.diagnoseSubtitle, style: tt.bodyMedium),
           const SizedBox(height: 6),
           const _FreeQuotaHelperText(),
           const SizedBox(height: 24),
 
           _DiagnoseOptionCard(
             icon: Icons.warning_amber_rounded,
-            title: 'Urgent On-the-Spot',
-            description:
-                'Answer quick questions about symptoms you\'re experiencing '
-                'right now for an immediate AI analysis.',
+            title: l10n.urgentOnTheSpot,
+            description: l10n.urgentDescription,
             accentColor: const Color(0xFFFF9800),
             onTap: () => _guardedLaunch(context, const UrgentWizardScreen()),
           ),
@@ -1136,21 +1178,17 @@ class DiagnoseTabBody extends StatelessWidget {
 
           _DiagnoseOptionCard(
             icon: Icons.camera_alt_rounded,
-            title: 'Photo-Based',
-            description:
-                'Upload or take photos of the issue — our AI analyzes visible '
-                'damage, fluid leaks, tire wear, and more.',
+            title: l10n.photoBased,
+            description: l10n.photoDescription,
             accentColor: AppColors.accent,
             onTap: () => _guardedLaunch(context, const PhotoDiagnoseScreen()),
           ),
           const SizedBox(height: 14),
 
-          // Gemini Live
           _DiagnoseOptionCard(
             icon: Icons.videocam_rounded,
-            title: 'Gemini Live',
-            description: 'Real-time AI diagnosis via your camera. '
-                'Point, capture, and chat with Gemini about what it sees.',
+            title: l10n.geminiLive,
+            description: l10n.geminiLiveDescription,
             accentColor: const Color(0xFF4CAF50),
             badge: 'BETA',
             onTap: () => launchLiveDiagnosis(context),
@@ -1158,13 +1196,26 @@ class DiagnoseTabBody extends StatelessWidget {
           const SizedBox(height: 14),
           _DiagnoseOptionCard(
             icon: Icons.sensors_rounded,
-            title: 'OBD Pro Diagnostic Suite',
-            description:
-                'Connect a Bluetooth ELM327 adapter for live vitals, a one-time '
-                'ECU snapshot, and premium idle and drive scans.',
+            title: l10n.obdProSuite,
+            description: l10n.obdProDescription,
             accentColor: const Color(0xFF7EE787),
             badge: 'PRO',
             onTap: () => launchObdProSuite(context),
+          ),
+          const SizedBox(height: 14),
+          _DiagnoseOptionCard(
+            icon: Icons.error_outline_rounded,
+            title: l10n.errorCodeLookup,
+            description: l10n.errorCodeLookupDescription,
+            accentColor: const Color(0xFFE57373),
+            onTap: () {
+              HapticFeedback.lightImpact();
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const DtcLookupScreen(),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -1284,7 +1335,7 @@ class _FreeQuotaHelperText extends StatelessWidget {
         return Text(
           subtitle,
           style: tt.bodySmall?.copyWith(
-            color: AppColors.textTertiary,
+            color: FxColors.textTertiary(context),
             fontSize: 11,
           ),
         );
@@ -1651,6 +1702,7 @@ class ProfileTabBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context)!;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
@@ -1680,12 +1732,9 @@ class ProfileTabBody extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('FixEase Driver', style: tt.titleLarge),
+                      Text(l10n.profileTitle, style: tt.titleLarge),
                       const SizedBox(height: 2),
-                      Text(
-                        'Guest mode · all core data stays on this device',
-                        style: tt.bodySmall,
-                      ),
+                      Text(l10n.profileSubtitle, style: tt.bodySmall),
                     ],
                   ),
                 ),
@@ -1693,16 +1742,87 @@ class ProfileTabBody extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
+          NeuPane(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.settings, style: tt.titleMedium),
+                const SizedBox(height: 8),
+                ListenableBuilder(
+                  listenable: ThemeService.instance,
+                  builder: (_, __) => SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(l10n.lightTheme),
+                    subtitle: Text(l10n.lightThemeSubtitle, style: tt.bodySmall),
+                    value: ThemeService.instance.isLight,
+                    activeThumbColor: AppColors.accent,
+                    onChanged: (_) => ThemeService.instance.toggle(),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListenableBuilder(
+                  listenable: LocaleService.instance,
+                  builder: (_, __) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Report language'),
+                        subtitle: Text(
+                          'AI diagnostic reports only — app stays in English',
+                          style: tt.bodySmall,
+                        ),
+                      ),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                            value: 'en',
+                            label: Text('English'),
+                          ),
+                          ButtonSegment(
+                            value: 'hi',
+                            label: Text('Hindi (Hinglish)'),
+                          ),
+                        ],
+                        selected: {
+                          LocaleService.instance.hindiReports ? 'hi' : 'en',
+                        },
+                        onSelectionChanged: (selection) {
+                          final code = selection.first;
+                          if (code == 'hi') {
+                            LocaleService.instance.setHindi();
+                          } else {
+                            LocaleService.instance.setEnglish();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (AppConfig.isDemoMode) ...[
+            const SizedBox(height: 14),
+            ListenableBuilder(
+              listenable: SubscriptionService.instance,
+              builder: (_, __) => DemoSubscriptionCard(
+                state: SubscriptionService.instance.demoState,
+                onChanged: SubscriptionService.instance.setDemoState,
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
           _ProfileMenuItem(
             icon: Icons.directions_car_rounded,
-            label: 'My Vehicles',
+            label: l10n.myVehicles,
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const MyVehiclesScreen()),
             ),
           ),
           _ProfileMenuItem(
             icon: Icons.add_circle_outline_rounded,
-            label: 'Add Vehicle',
+            label: l10n.addVehicle,
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => const AddVehicleScreen(),
@@ -1711,7 +1831,7 @@ class ProfileTabBody extends StatelessWidget {
           ),
           _ProfileMenuItem(
             icon: Icons.history_rounded,
-            label: 'Diagnostic History',
+            label: l10n.diagnosticHistory,
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -1724,7 +1844,7 @@ class ProfileTabBody extends StatelessWidget {
             listenable: SubscriptionService.instance,
             builder: (_, __) => _ProfileMenuItem(
               icon: Icons.workspace_premium_rounded,
-              label: 'Subscription',
+              label: l10n.subscription,
               subtitle: SubscriptionService.instance.tierLabel,
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const PaywallScreen()),
@@ -1760,7 +1880,7 @@ class ProfileTabBody extends StatelessWidget {
             ),
           _ProfileMenuItem(
             icon: Icons.help_outline_rounded,
-            label: 'Help & Support',
+            label: l10n.support,
             subtitle: AppConfig.supportEmail,
             onTap: () {
               _openSupport();
@@ -1768,7 +1888,7 @@ class ProfileTabBody extends StatelessWidget {
           ),
           _ProfileMenuItem(
             icon: Icons.info_outline_rounded,
-            label: 'About FixEase',
+            label: l10n.about,
             subtitle: 'v1.0.0',
             onTap: () {
               _openAbout();
@@ -1806,7 +1926,7 @@ class _ProfileMenuItem extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [
-              Icon(icon, size: 20, color: AppColors.textSecondary),
+              Icon(icon, size: 20, color: FxColors.textSecondary(context)),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

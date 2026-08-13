@@ -14,6 +14,7 @@ import '../models/diagnostic.dart';
 import '../models/obd.dart';
 import '../models/vehicle.dart';
 import 'device_identity_service.dart';
+import 'locale_service.dart';
 import 'subscription_service.dart';
 
 /// Orchestrates AI diagnostic calls through the backend quota and AI proxy.
@@ -37,12 +38,12 @@ class AiService {
     try {
       final payload = await _postJsonWithRetry(
         '/api/diagnose/symptoms',
-        {
+        _withReportLanguage({
           'vehicle': _vehiclePayload(vehicle),
           'symptoms': symptoms,
           'severity': severity.name,
           'description': description,
-        },
+        }),
       );
       return AiDiagnosticResponse.fromJson(payload);
     } catch (_) {
@@ -67,12 +68,12 @@ class AiService {
     try {
       final payload = await _postJsonWithRetry(
         '/api/diagnose/photos',
-        {
+        _withReportLanguage({
           'vehicle': _vehiclePayload(vehicle),
           'images': await _encodeFiles(images.take(8).toList()),
           'description': description,
           if (obdContext != null) 'obd_context': obdContext,
-        },
+        }),
       );
       return AiDiagnosticResponse.fromJson(payload);
     } catch (_) {
@@ -94,11 +95,11 @@ class AiService {
     try {
       final payload = await _postJsonWithRetry(
         '/api/diagnose/invoice-audit',
-        {
+        _withReportLanguage({
           'vehicle': _vehiclePayload(vehicle),
           'documents': await _encodeFiles([document]),
           'purpose': purpose,
-        },
+        }),
       );
       return AiDiagnosticResponse.fromJson(payload);
     } catch (_) {
@@ -119,7 +120,7 @@ class AiService {
     try {
       final payload = await _postJsonWithRetry(
         '/api/diagnose/obd-pro',
-        {
+        _withReportLanguage({
           'vehicle': _vehiclePayload(vehicle),
           'mode': record.kind.name,
           'is_partial': record.isPartial,
@@ -128,7 +129,7 @@ class AiService {
           'captured_duration_seconds': record.capturedDurationSeconds,
           'static_snapshot': record.staticSnapshot.toJson(),
           'processed_scan': record.processedScan.toJson(),
-        },
+        }),
       );
       return AiDiagnosticResponse.fromJson(payload);
     } catch (_) {
@@ -251,6 +252,13 @@ class AiService {
     if (lower.endsWith('.webp')) return 'image/webp';
     if (lower.endsWith('.heic')) return 'image/heic';
     return 'image/jpeg';
+  }
+
+  Map<String, dynamic> _withReportLanguage(Map<String, dynamic> body) {
+    return {
+      ...body,
+      'report_language': LocaleService.instance.reportLanguageCode,
+    };
   }
 
   Future<Map<String, dynamic>> _postJson(

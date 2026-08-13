@@ -1,3 +1,5 @@
+import '../utils/enum_utils.dart';
+
 enum ConversationMessageRole { user, assistant }
 
 enum ConversationMessageSource { text, audio, image, file }
@@ -58,8 +60,10 @@ class ConversationMessage {
   factory ConversationMessage.fromJson(Map<String, dynamic> json) {
     return ConversationMessage(
       id: json['id'] as String,
-      role: ConversationMessageRole.values.byName(
-        json['role'] as String? ?? ConversationMessageRole.user.name,
+      role: enumByName(
+        ConversationMessageRole.values,
+        json['role'] as String?,
+        ConversationMessageRole.user,
       ),
       text: json['text'] as String? ?? '',
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ??
@@ -67,8 +71,10 @@ class ConversationMessage {
       attachmentPath: json['attachment_path'] as String?,
       attachmentName: json['attachment_name'] as String?,
       attachmentMimeType: json['attachment_mime_type'] as String?,
-      source: ConversationMessageSource.values.byName(
-        json['source'] as String? ?? ConversationMessageSource.text.name,
+      source: enumByName(
+        ConversationMessageSource.values,
+        json['source'] as String?,
+        ConversationMessageSource.text,
       ),
     );
   }

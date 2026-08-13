@@ -556,6 +556,7 @@ class GeminiLiveService extends ChangeNotifier {
         if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
         _isSpeaking = true;
         notifyListeners();
+        await _tts.setLanguage('en-US');
         await _tts.speak(responseText);
         if (!_isCurrentRequest(requestGeneration, requestThreadId)) return;
         _isSpeaking = false;

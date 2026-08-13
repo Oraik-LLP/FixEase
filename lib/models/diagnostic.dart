@@ -1,3 +1,5 @@
+import '../utils/enum_utils.dart';
+
 enum DiagnosticType { urgent, photo, invoiceAudit, live, obdIdle, obdDrive }
 enum Severity { low, medium, high, critical }
 
@@ -119,7 +121,7 @@ class DiagnosticSession {
   bool get isObd =>
       type == DiagnosticType.obdIdle || type == DiagnosticType.obdDrive;
 
-  bool get supportsPdfExport => !isObd;
+  bool get supportsPdfExport => true;
 
   String get severityLabel => switch (severity) {
         Severity.low => 'Low',
@@ -172,10 +174,17 @@ class DiagnosticSession {
       DiagnosticSession(
         id: j['id'] as String,
         vehicleId: j['vehicle_id'] as String,
-        type: DiagnosticType.values.byName(j['type'] as String),
+        type: enumByName(
+          DiagnosticType.values,
+          j['type'] as String?,
+          DiagnosticType.urgent,
+        ),
         symptoms: (j['symptoms'] as List?)?.cast<String>() ?? [],
-        severity:
-            Severity.values.byName(j['severity'] as String? ?? 'medium'),
+        severity: enumByName(
+          Severity.values,
+          j['severity'] as String?,
+          Severity.medium,
+        ),
         description: j['description'] as String?,
         imageUrls: (j['image_urls'] as List?)?.cast<String>() ?? [],
         aiResponse: j['ai_response'] as String?,
