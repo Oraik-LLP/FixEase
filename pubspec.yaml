@@ -56,7 +56,8 @@ flutter:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
-  image_path: "assets/logo/fixease_logo.png"
+  image_path: "fixease_new_logo.png"
   min_sdk_android: 21
-  adaptive_icon_background: "#111114"
-  adaptive_icon_foreground: "assets/logo/fixease_logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "fixease_new_logo.png"
+  adaptive_icon_foreground_inset: 0
