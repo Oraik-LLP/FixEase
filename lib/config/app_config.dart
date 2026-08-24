@@ -1,6 +1,11 @@
 /// Global app configuration for monetization, legal links, and support.
 abstract final class AppConfig {
-  static const bool isDemoMode = true;
+  /// Production builds use the platform store by default. Demo entitlement
+  /// controls must be enabled explicitly for internal QA builds.
+  static const bool isDemoMode = bool.fromEnvironment(
+    'FIXEASE_DEMO_MODE',
+    defaultValue: false,
+  );
 
   static const supportEmail = 'support@oraik.co';
   static const termsUrl = 'https://oraik.co/terms';
@@ -9,11 +14,11 @@ abstract final class AppConfig {
 
   static const revenueCatAndroidApiKey = String.fromEnvironment(
     'REVENUECAT_ANDROID_API_KEY',
-    defaultValue: 'demo_android_rc_key',
+    defaultValue: '',
   );
   static const revenueCatIosApiKey = String.fromEnvironment(
     'REVENUECAT_IOS_API_KEY',
-    defaultValue: 'demo_ios_rc_key',
+    defaultValue: '',
   );
 
   static const offeringId = 'default';

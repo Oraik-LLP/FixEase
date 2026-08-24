@@ -9,6 +9,7 @@ import '../models/conversation.dart';
 import '../models/diagnostic.dart';
 import '../screens/subscription/paywall_screen.dart';
 import 'conversation_service.dart';
+import 'device_identity_service.dart';
 import 'diagnostic_service.dart';
 import 'local_store_service.dart';
 import 'quota_service.dart';
@@ -771,12 +772,25 @@ class SubscriptionService extends ChangeNotifier {
     final apiKey = Platform.isIOS
         ? AppConfig.revenueCatIosApiKey
         : AppConfig.revenueCatAndroidApiKey;
-    if (apiKey.trim().isEmpty) return;
+    if (apiKey.trim().isEmpty) {
+      _lastSyncErrorMessage = Platform.isIOS
+          ? 'iOS billing is not configured in this build.'
+          : 'Google Play billing is not configured in this build.';
+      return;
+    }
+
+    final appUserId = await DeviceIdentityService.getDeviceId();
+    if (appUserId == null || appUserId.isEmpty) {
+      _lastSyncErrorMessage =
+          'FixEase could not establish a stable billing identity.';
+      return;
+    }
 
     await Purchases.setLogLevel(
       kDebugMode ? LogLevel.debug : LogLevel.warn,
     );
-    await Purchases.configure(PurchasesConfiguration(apiKey));
+    final configuration = PurchasesConfiguration(apiKey)..appUserID = appUserId;
+    await Purchases.configure(configuration);
     Purchases.addCustomerInfoUpdateListener(_applyCustomerInfo);
     _configuredPurchases = true;
   }

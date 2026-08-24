@@ -1,0 +1,5 @@
+{
+  "AI_BACKEND_URL": "https://api.fixease.oraik.co",
+  "FIXEASE_DEMO_MODE": "false",
+  "REVENUECAT_ANDROID_API_KEY": "goog_your_public_revenuecat_sdk_key"
+}

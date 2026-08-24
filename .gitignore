@@ -17,3 +17,7 @@ ios/Pods/
 # Secrets
 .env
 .*
+release_defines.json
+android/key.properties
+android/*.jks
+android/*.keystore

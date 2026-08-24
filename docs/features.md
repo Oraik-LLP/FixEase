@@ -63,9 +63,12 @@ FixEase is a local-first car helper app. The app stores user-facing data on-devi
 
 ### Subscription / Paywall
 
-- Subscription UI still exists in the app.
-- Subscription state is now persisted locally instead of syncing remotely.
-- Billing is still simulated in-app and is not connected to Play Billing yet.
+- Free users receive three diagnostics per quota window and two monthly PDF exports.
+- Google Play Billing and StoreKit purchases are handled through RevenueCat.
+- Production builds default to real store billing; demo tiers require an explicit
+  `FIXEASE_DEMO_MODE=true` internal build flag.
+- Premium backend priority and unlimited diagnostic quota are granted only after
+  server-side RevenueCat entitlement verification.
 
 ### Feature Flags
 

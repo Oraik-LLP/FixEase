@@ -12,6 +12,7 @@ import {
 } from './quota_store.js';
 import { registerMechanicRoutes } from './mechanic_routes.js';
 import { registerConsumerVehicleRoutes } from './consumer_vehicle_routes.js';
+import { createRevenueCatEntitlementVerifier } from './revenuecat_entitlements.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -27,6 +28,19 @@ const requestQueueTimeoutMs = Number(process.env.REQUEST_QUEUE_TIMEOUT_MS || 120
 const largeRequestBytes = Number(process.env.LARGE_REQUEST_BYTES || 8 * 1024 * 1024);
 const upstreamTimeoutMs = Number(process.env.GEMINI_TIMEOUT_MS || 65000);
 const runningInProduction = process.env.NODE_ENV === 'production';
+const revenueCatSecretApiKey = process.env.REVENUECAT_SECRET_API_KEY?.trim();
+const revenueCatProEntitlement =
+  process.env.REVENUECAT_PRO_ENTITLEMENT || 'ENTITLEMENT_PRO';
+const revenueCatEmergencyEntitlement =
+  process.env.REVENUECAT_EMERGENCY_ENTITLEMENT || 'ENTITLEMENT_EMERGENCY';
+const revenueCatVerificationCacheMs = Number(
+  process.env.REVENUECAT_VERIFICATION_CACHE_MS || 300000,
+);
+const hasVerifiedRevenueCatEntitlement = createRevenueCatEntitlementVerifier({
+  apiKey: revenueCatSecretApiKey,
+  entitlementIds: [revenueCatProEntitlement, revenueCatEmergencyEntitlement],
+  cacheMs: revenueCatVerificationCacheMs,
+});
 const aiClient = createAiClient();
 
 app.use(cors());
@@ -46,10 +60,10 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: `${maxJsonMb}mb` }));
 
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   req.requestId = Math.random().toString(36).slice(2, 10);
   req.requestStartedAt = Date.now();
-  const plan = resolveRequestPlan(req);
+  const plan = await resolveRequestPlan(req);
   req.requestPlan = plan;
   res.on('finish', () => {
     const durationMs = Date.now() - req.requestStartedAt;
@@ -102,11 +116,21 @@ function createAiClient() {
   return new GoogleGenAI({ apiKey });
 }
 
-function resolveRequestPlan(req) {
+async function resolveRequestPlan(req) {
   const rawPlan = String(req.headers['x-fixease-plan'] || 'free').toLowerCase();
-  return rawPlan === 'pro' || rawPlan === 'emergencypass' || rawPlan === 'emergency_pass'
-    ? 'pro'
-    : 'free';
+  const claimsPremium =
+    rawPlan === 'pro' ||
+    rawPlan === 'emergencypass' ||
+    rawPlan === 'emergency_pass';
+  if (!claimsPremium) return 'free';
+
+  if (!runningInProduction && process.env.ALLOW_UNVERIFIED_PRO_PLAN === 'true') {
+    return 'pro';
+  }
+
+  const appUserId = resolveDeviceId(req);
+  if (!appUserId || !revenueCatSecretApiKey) return 'free';
+  return (await hasVerifiedRevenueCatEntitlement(appUserId)) ? 'pro' : 'free';
 }
 
 function isLargeRequest(req) {
@@ -164,7 +188,7 @@ function createRequestGate({
 
   return async function gate(req, _res, next) {
     const ticket = {
-      plan: req.requestPlan || resolveRequestPlan(req),
+      plan: req.requestPlan || 'free',
       isLarge: isLargeRequest(req),
       resolve: null,
       timeout: null,

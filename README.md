@@ -67,6 +67,39 @@ Not implemented yet:
 
 *Note: If `AI_BACKEND_URL` is omitted or unreachable, the app remains fully functional and will gracefully fall back to local heuristic estimations instead of Gemini.*
 
+## Production Android Billing
+
+FixEase uses Google Play Billing through RevenueCat. Production builds default
+to real store billing; demo entitlement controls are disabled unless
+`FIXEASE_DEMO_MODE=true` is explicitly supplied.
+
+1. Create these products in Google Play Console and attach them to the
+   RevenueCat `default` offering:
+   - `fixease_emergency_pass`
+   - `fixease_pro_driver_monthly`
+2. Map them to `ENTITLEMENT_EMERGENCY` and `ENTITLEMENT_PRO` in RevenueCat.
+3. Copy `release_defines.example.json` to an ignored local file such as
+   `release_defines.json`, then add the Android public RevenueCat SDK key.
+4. Configure the backend `REVENUECAT_SECRET_API_KEY`. This key belongs only on
+   the server and must never be passed to Flutter or committed.
+5. Create `android/key.properties` with the Play release signing details:
+
+   ```properties
+   storePassword=your_store_password
+   keyPassword=your_key_password
+   keyAlias=your_key_alias
+   storeFile=C:/secure/path/to/fixease-upload.jks
+   ```
+
+6. Build the Play release:
+
+   ```bash
+   flutter build appbundle --release --dart-define-from-file=release_defines.json
+   ```
+
+For an installable APK, replace `appbundle` with `apk`. Google Play production
+distribution should use the Android App Bundle and a release signing key.
+
 ## Backend Models
 
 - standard diagnosis: `gemini-flash-latest`
@@ -81,7 +114,7 @@ The backend can override them with:
 - Flutter app: UI, camera/photo capture, local persistence, report rendering
 - Local storage: `shared_preferences` for vehicles, diagnostics, and subscription state
 - AI backend: Express + `@google/genai`
-- Supabase: still present in the repo for optional future auth/storage work, but core user data no longer depends on it
+- RevenueCat: Google Play/StoreKit purchase and entitlement synchronization
 
 ## Key Environment Variables
 
