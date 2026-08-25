@@ -1,6 +1,7 @@
 export function createRevenueCatEntitlementVerifier({
   apiKey,
   entitlementIds,
+  limitedEntitlementDurationsMs = {},
   cacheMs = 300000,
   fetchImpl = globalThis.fetch,
   now = () => Date.now(),
@@ -29,7 +30,11 @@ export function createRevenueCatEntitlementVerifier({
       const payload = await response.json();
       const entitlements = payload?.subscriber?.entitlements || {};
       const active = entitlementIds.some((id) =>
-        isRevenueCatEntitlementActive(entitlements[id], now()),
+        isRevenueCatEntitlementActive(
+          entitlements[id],
+          now(),
+          limitedEntitlementDurationsMs[id],
+        ),
       );
       cache.set(appUserId, { active, expiresAt: now() + cacheMs });
       return active;
@@ -39,13 +44,25 @@ export function createRevenueCatEntitlementVerifier({
   };
 }
 
-export function isRevenueCatEntitlementActive(entitlement, nowMs = Date.now()) {
+export function isRevenueCatEntitlementActive(
+  entitlement,
+  nowMs = Date.now(),
+  fallbackDurationMs,
+) {
   if (!entitlement) return false;
   const expiries = [
     entitlement.expires_date,
     entitlement.grace_period_expires_date,
   ].filter(Boolean);
-  if (expiries.length === 0) return true;
+  if (expiries.length === 0) {
+    if (!Number.isFinite(fallbackDurationMs)) return true;
+    const purchaseDate =
+      entitlement.purchase_date || entitlement.latest_purchase_date;
+    const purchaseMs = Date.parse(purchaseDate);
+    return (
+      Number.isFinite(purchaseMs) && purchaseMs + fallbackDurationMs > nowMs
+    );
+  }
   return expiries.some((expiry) => {
     const expiryMs = Date.parse(expiry);
     return Number.isFinite(expiryMs) && expiryMs > nowMs;

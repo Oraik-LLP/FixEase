@@ -146,6 +146,8 @@ Backend:
 - optional `PORT`
 - optional `GEMINI_DIAGNOSIS_MODEL`
 - optional `GEMINI_LIVE_MODEL`
+- `REVENUECAT_SECRET_API_KEY` for server-side premium verification
+- optional `REVENUECAT_EMERGENCY_DURATION_HOURS` (defaults to `48`)
 
 ## Docs
 

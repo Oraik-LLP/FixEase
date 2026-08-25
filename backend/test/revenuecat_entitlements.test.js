@@ -24,6 +24,31 @@ test('rejects missing and expired RevenueCat entitlements', () => {
   );
 });
 
+test('limits a lifetime entitlement to its configured pass duration', () => {
+  const now = Date.parse('2026-08-24T00:00:00Z');
+  const duration = 48 * 60 * 60 * 1000;
+  assert.equal(
+    isRevenueCatEntitlementActive(
+      { expires_date: null, purchase_date: '2026-08-23T00:00:00Z' },
+      now,
+      duration,
+    ),
+    true,
+  );
+  assert.equal(
+    isRevenueCatEntitlementActive(
+      { expires_date: null, purchase_date: '2026-08-21T00:00:00Z' },
+      now,
+      duration,
+    ),
+    false,
+  );
+  assert.equal(
+    isRevenueCatEntitlementActive({ expires_date: null }, now, duration),
+    false,
+  );
+});
+
 test('uses a valid grace period after the normal expiry', () => {
   const now = Date.parse('2026-08-24T00:00:00Z');
   assert.equal(

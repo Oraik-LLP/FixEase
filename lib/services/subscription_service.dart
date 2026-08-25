@@ -823,8 +823,7 @@ class SubscriptionService extends ChangeNotifier {
 
     final emergency = info.entitlements.all[AppConfig.entitlementEmergencyId];
     final expiry = _resolveEmergencyExpiry(emergency);
-    final emergencyActive = emergency?.isActive == true ||
-        (expiry != null && expiry.isAfter(DateTime.now()));
+    final emergencyActive = expiry != null && expiry.isAfter(DateTime.now());
     if (emergencyActive) {
       _tier = SubscriptionTier.emergencyPass;
       _emergencyExpiresAt = expiry;

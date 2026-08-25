@@ -33,12 +33,17 @@ const revenueCatProEntitlement =
   process.env.REVENUECAT_PRO_ENTITLEMENT || 'ENTITLEMENT_PRO';
 const revenueCatEmergencyEntitlement =
   process.env.REVENUECAT_EMERGENCY_ENTITLEMENT || 'ENTITLEMENT_EMERGENCY';
+const revenueCatEmergencyDurationMs =
+  Number(process.env.REVENUECAT_EMERGENCY_DURATION_HOURS || 48) * 60 * 60 * 1000;
 const revenueCatVerificationCacheMs = Number(
   process.env.REVENUECAT_VERIFICATION_CACHE_MS || 300000,
 );
 const hasVerifiedRevenueCatEntitlement = createRevenueCatEntitlementVerifier({
   apiKey: revenueCatSecretApiKey,
   entitlementIds: [revenueCatProEntitlement, revenueCatEmergencyEntitlement],
+  limitedEntitlementDurationsMs: {
+    [revenueCatEmergencyEntitlement]: revenueCatEmergencyDurationMs,
+  },
   cacheMs: revenueCatVerificationCacheMs,
 });
 const aiClient = createAiClient();
