@@ -171,6 +171,7 @@ class _SplashScreenState extends State<SplashScreen>
                     child: Image(
                       image: _logoAsset,
                       fit: BoxFit.contain,
+                      filterQuality: FilterQuality.high,
                       gaplessPlayback: true,
                       errorBuilder: (_, __, ___) => const Icon(
                         Icons.build_rounded,

@@ -759,8 +759,12 @@ class SubscriptionService extends ChangeNotifier {
     for (final package in offering.availablePackages) {
       final packageId = package.identifier.toLowerCase();
       final productId = package.storeProduct.identifier.toLowerCase();
-      if (ids.any((id) =>
-          packageId == id.toLowerCase() || productId == id.toLowerCase())) {
+      if (ids.any((id) {
+        final normalizedId = id.toLowerCase();
+        return packageId == normalizedId ||
+            productId == normalizedId ||
+            productId.startsWith('$normalizedId:');
+      })) {
         return package;
       }
     }
