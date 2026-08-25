@@ -100,6 +100,24 @@ to real store billing; demo entitlement controls are disabled unless
 For an installable APK, replace `appbundle` with `apk`. Google Play production
 distribution should use the Android App Bundle and a release signing key.
 
+### Google Play promotion codes
+
+The paywall includes **Redeem a Google Play code** for both paid products. It
+starts that product's normal Google Play purchase sheet; the tester then opens
+the payment-method menu and chooses **Redeem code**. RevenueCat receives the
+result and unlocks the matching entitlement through the same verified purchase
+path as a paid transaction.
+
+Create production codes in Play Console under the promotion settings for the
+matching product. Do not hard-code codes in Flutter: strings embedded in an APK
+can be extracted and reused. Google Play supports automatically generated
+single-use codes; subscription products can also use custom multi-use codes.
+
+Billing and promotion-code tests must use a Google Play test track and an
+approved tester account. A debug-signed APK can be sideloaded to review the app,
+but an APK that has no signature cannot be installed, and sideloading does not
+reproduce the complete Play purchase environment.
+
 ## Backend Models
 
 - standard diagnosis: `gemini-flash-latest`

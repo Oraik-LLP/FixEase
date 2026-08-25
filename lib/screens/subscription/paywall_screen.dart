@@ -138,6 +138,18 @@ class _PaywallScreenState extends State<PaywallScreen> {
                             ),
                             const SizedBox(height: 12),
                             NeuSecondaryButton(
+                              label: 'Redeem a Google Play code',
+                              icon: Icons.redeem_rounded,
+                              onPressed: selectedProduct.available
+                                  ? () {
+                                      _showRedeemInstructions(
+                                        selectedProduct,
+                                      );
+                                    }
+                                  : null,
+                            ),
+                            const SizedBox(height: 12),
+                            NeuSecondaryButton(
                               label: 'Restore Purchases',
                               icon: Icons.restore_rounded,
                               onPressed: () {
@@ -222,6 +234,71 @@ class _PaywallScreenState extends State<PaywallScreen> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  Future<void> _showRedeemInstructions(
+    SubscriptionProduct product,
+  ) async {
+    final shouldContinue = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.redeem_rounded, color: AppColors.accent),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Redeem for ${product.title}',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'On the Google Play purchase sheet, tap the arrow beside your '
+                'payment method, choose Redeem code, then enter the code you '
+                'received.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'The code must have been issued for ${product.title}. Google '
+                'Play will show its duration, eligibility, and renewal terms '
+                'before you confirm.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 22),
+              NeuPrimaryButton(
+                label: 'Continue to Google Play',
+                icon: Icons.open_in_new_rounded,
+                onPressed: () => Navigator.of(sheetContext).pop(true),
+              ),
+              const SizedBox(height: 10),
+              NeuSecondaryButton(
+                label: 'Cancel',
+                icon: Icons.close_rounded,
+                onPressed: () => Navigator.of(sheetContext).pop(false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (shouldContinue != true || !mounted) return;
+    await _handlePurchase(product.type);
   }
 
   Future<void> _openUrl(String url) async {
