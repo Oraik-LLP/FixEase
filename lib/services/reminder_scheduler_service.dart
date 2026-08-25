@@ -56,16 +56,12 @@ class ReminderSchedulerService {
     }
 
     if (Platform.isAndroid && requestPermissions) {
-      final android = _notifications
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>();
+      final android = _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
       await android?.requestNotificationsPermission();
-      await android?.requestExactAlarmsPermission();
     }
 
-    if (Platform.isAndroid &&
-        registerWorkmanager &&
-        !_workmanagerRegistered) {
+    if (Platform.isAndroid && registerWorkmanager && !_workmanagerRegistered) {
       await Workmanager().initialize(
         garageReminderCallbackDispatcher,
       );
@@ -85,48 +81,30 @@ class ReminderSchedulerService {
   Future<bool> areNotificationsEnabled() async {
     await initialize(requestPermissions: false);
     if (!Platform.isAndroid) return true;
-    final android = _notifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final android = _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
     return await android?.areNotificationsEnabled() ?? false;
   }
 
-  Future<bool> canScheduleExactNotifications() async {
-    await initialize(requestPermissions: false);
-    if (!Platform.isAndroid) return true;
-    final android = _notifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    return await android?.canScheduleExactNotifications() ?? true;
-  }
-
   Future<bool> hasReminderPermissions() async {
-    final notificationsEnabled = await areNotificationsEnabled();
-    final exactAlarmsEnabled = await canScheduleExactNotifications();
-    return notificationsEnabled && exactAlarmsEnabled;
+    return areNotificationsEnabled();
   }
 
   Future<bool> requestReminderPermissions() async {
     await initialize(requestPermissions: false);
     if (!Platform.isAndroid) return true;
-    final android = _notifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    final notificationsGranted =
-        await android?.requestNotificationsPermission() ?? true;
-    final exactAlarmsGranted =
-        await android?.requestExactAlarmsPermission() ?? true;
-    return notificationsGranted && exactAlarmsGranted;
+    final android = _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    return await android?.requestNotificationsPermission() ?? true;
   }
 
   Future<void> syncAllProfiles() async {
     for (final profile in GarageService.instance.profiles) {
-      final vehicle = VehicleService.instance.vehicles
-          .cast<Vehicle?>()
-          .firstWhere(
-            (item) => item?.id == profile.vehicleId,
-            orElse: () => null,
-          );
+      final vehicle =
+          VehicleService.instance.vehicles.cast<Vehicle?>().firstWhere(
+                (item) => item?.id == profile.vehicleId,
+                orElse: () => null,
+              );
       await syncVehicleReminders(profile: profile, vehicle: vehicle);
     }
   }
@@ -243,7 +221,7 @@ class ReminderSchedulerService {
           priority: Priority.high,
         ),
       ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 
