@@ -1,45 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
-import 'local_store_service.dart';
-
-/// Persists and broadcasts light/dark theme preference.
-class ThemeService extends ChangeNotifier {
-  ThemeService._();
-  static final instance = ThemeService._();
-
-  static const _key = 'theme_mode';
-
-  ThemeMode _mode = ThemeMode.dark;
-
-  ThemeMode get mode => _mode;
-
-  bool get isLight => _mode == ThemeMode.light;
-
-  Future<void> init() async {
-    await LocalStoreService.init();
-    final stored = LocalStoreService.prefs.getString(_key);
-    _mode = switch (stored) {
-      'light' => ThemeMode.light,
-      'dark' => ThemeMode.dark,
-      _ => ThemeMode.dark,
-    };
-  }
-
-  Future<void> setMode(ThemeMode mode) async {
-    if (_mode == mode) return;
-    _mode = mode;
-    await LocalStoreService.prefs.setString(
-      _key,
-      mode == ThemeMode.light ? 'light' : 'dark',
-    );
-    notifyListeners();
-  }
-
-  Future<void> toggle() async {
-    await setMode(isLight ? ThemeMode.dark : ThemeMode.light);
-  }
-}
 
 /// Light palette companion to [AppColors].
 abstract final class AppColorsLight {

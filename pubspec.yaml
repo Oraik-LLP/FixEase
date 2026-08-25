@@ -1,7 +1,7 @@
 name: fixease
 description: FixEase car diagnostic app
 publish_to: "none"
-version: 1.0.0+8
+version: 1.0.0+9
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -52,12 +52,13 @@ flutter:
   generate: true
   assets:
     - assets/logo/
+    - fixease_new_logo.png
 
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
   image_path: "fixease_new_logo.png"
   min_sdk_android: 21
-  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_background: "#111114"
   adaptive_icon_foreground: "fixease_new_logo.png"
   adaptive_icon_foreground_inset: 0

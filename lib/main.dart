@@ -39,7 +39,6 @@ import 'widgets/neuomorphic.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocalStoreService.init();
-  await ThemeService.instance.init();
   await LocaleService.instance.init();
   try {
     await VehicleService.instance.load();
@@ -76,26 +75,20 @@ class FixEaseApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: ThemeService.instance,
-      builder: (context, _) {
-        return MaterialApp(
-          debugShowCheckedModeBanner: false,
-          title: 'FixEase',
-          theme: buildFixEaseLightTheme(),
-          darkTheme: buildFixEaseTheme(),
-          themeMode: ThemeService.instance.mode,
-          locale: const Locale('en'),
-          localizationsDelegates: const [
-            AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          supportedLocales: const [Locale('en')],
-          home: const SplashScreen(),
-        );
-      },
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'FixEase',
+      theme: buildFixEaseTheme(),
+      themeMode: ThemeMode.dark,
+      locale: const Locale('en'),
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('en')],
+      home: const SplashScreen(),
     );
   }
 }
@@ -113,7 +106,7 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
-  static const _logoAsset = AssetImage('assets/logo/fixease_logo.png');
+  static const _logoAsset = AssetImage('fixease_new_logo.png');
   late final AnimationController _anim;
   late final Animation<double> _fadeIn;
   late final Animation<double> _scale;
@@ -1166,7 +1159,6 @@ class DiagnoseTabBody extends StatelessWidget {
           const SizedBox(height: 6),
           const _FreeQuotaHelperText(),
           const SizedBox(height: 24),
-
           _DiagnoseOptionCard(
             icon: Icons.warning_amber_rounded,
             title: l10n.urgentOnTheSpot,
@@ -1175,7 +1167,6 @@ class DiagnoseTabBody extends StatelessWidget {
             onTap: () => _guardedLaunch(context, const UrgentWizardScreen()),
           ),
           const SizedBox(height: 14),
-
           _DiagnoseOptionCard(
             icon: Icons.camera_alt_rounded,
             title: l10n.photoBased,
@@ -1184,7 +1175,6 @@ class DiagnoseTabBody extends StatelessWidget {
             onTap: () => _guardedLaunch(context, const PhotoDiagnoseScreen()),
           ),
           const SizedBox(height: 14),
-
           _DiagnoseOptionCard(
             icon: Icons.videocam_rounded,
             title: l10n.geminiLive,
@@ -1438,7 +1428,7 @@ class _ReportListCard extends StatelessWidget {
                     ? Icons.air_rounded
                     : isObdDrive
                         ? Icons.route_rounded
-                : Icons.camera_alt_outlined;
+                        : Icons.camera_alt_outlined;
     final iconColor = isUrgent
         ? const Color(0xFFFF9800)
         : isInvoiceAudit
@@ -1449,7 +1439,7 @@ class _ReportListCard extends StatelessWidget {
                     ? const Color(0xFF5DD6B2)
                     : isObdDrive
                         ? const Color(0xFF7EE787)
-                : AppColors.accent;
+                        : AppColors.accent;
     final title = isUrgent
         ? 'Urgent Diagnosis'
         : isInvoiceAudit
@@ -1460,7 +1450,7 @@ class _ReportListCard extends StatelessWidget {
                     ? 'OBD Idle Scan'
                     : isObdDrive
                         ? 'OBD Drive Scan'
-                : 'Photo Diagnosis';
+                        : 'Photo Diagnosis';
     final isLocked = DiagnosticService.instance.isOlderThanMostRecentSessions(
           session,
           allowedCount: 2,
@@ -1749,18 +1739,6 @@ class ProfileTabBody extends StatelessWidget {
                 Text(l10n.settings, style: tt.titleMedium),
                 const SizedBox(height: 8),
                 ListenableBuilder(
-                  listenable: ThemeService.instance,
-                  builder: (_, __) => SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(l10n.lightTheme),
-                    subtitle: Text(l10n.lightThemeSubtitle, style: tt.bodySmall),
-                    value: ThemeService.instance.isLight,
-                    activeThumbColor: AppColors.accent,
-                    onChanged: (_) => ThemeService.instance.toggle(),
-                  ),
-                ),
-                const Divider(height: 1),
-                ListenableBuilder(
                   listenable: LocaleService.instance,
                   builder: (_, __) => Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1858,7 +1836,8 @@ class ProfileTabBody extends StatelessWidget {
               subtitle: 'Restore the free 3-diagnosis allowance',
               onTap: () async {
                 try {
-                  await SubscriptionService.instance.resetFreeCreditsForTesting();
+                  await SubscriptionService.instance
+                      .resetFreeCreditsForTesting();
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
