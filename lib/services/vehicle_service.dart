@@ -8,6 +8,7 @@ class VehicleService extends ChangeNotifier {
   VehicleService._();
   static final instance = VehicleService._();
   static const _storageKey = 'vehicles.v1';
+  static const _selectionKey = 'vehicles.selection.v1';
 
   final List<Vehicle> _vehicles = [];
   Vehicle? _selected;
@@ -21,7 +22,9 @@ class VehicleService extends ChangeNotifier {
     _vehicles
       ..clear()
       ..addAll(rows.map(Vehicle.fromJson));
-    _selected = _vehicles.isNotEmpty ? _vehicles.first : null;
+    final selectedId = LocalStoreService.readJsonMap(_selectionKey)?['id'];
+    _selected = _vehicles.where((v) => v.id == selectedId).firstOrNull ??
+        (_vehicles.isNotEmpty ? _vehicles.first : null);
     notifyListeners();
   }
 
@@ -39,7 +42,7 @@ class VehicleService extends ChangeNotifier {
     } else {
       _vehicles[index] = vehicle;
     }
-    if (_selected?.id == vehicle.id) {
+    if (_selected == null || _selected?.id == vehicle.id) {
       _selected = vehicle;
     }
     notifyListeners();
@@ -55,16 +58,17 @@ class VehicleService extends ChangeNotifier {
     await _persist();
   }
 
-  void select(Vehicle v) {
+  Future<void> select(Vehicle v) async {
     _selected = v;
     notifyListeners();
-    _persist();
+    await _persist();
   }
 
-  Future<void> _persist() {
-    return LocalStoreService.writeJsonList(
+  Future<void> _persist() async {
+    await LocalStoreService.writeJsonList(
       _storageKey,
       _vehicles.map((v) => v.toJson()).toList(),
     );
+    await LocalStoreService.writeJsonMap(_selectionKey, {'id': _selected?.id});
   }
 }

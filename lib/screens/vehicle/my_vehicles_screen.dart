@@ -62,6 +62,11 @@ class MyVehiclesScreen extends StatelessWidget {
                           VehicleService.instance.select(v);
                         },
                         onDelete: () => _confirmDelete(context, v),
+                        onEditVin: () => _editVin(context, v),
+                        onEditDetails: () => Navigator.of(context).push(
+                            MaterialPageRoute<Vehicle>(
+                                builder: (_) =>
+                                    AddVehicleScreen(initialVehicle: v))),
                       );
                     },
                   ),
@@ -87,6 +92,60 @@ class MyVehiclesScreen extends StatelessWidget {
     Navigator.of(context).push(
       MaterialPageRoute<Vehicle>(builder: (_) => const AddVehicleScreen()),
     );
+  }
+
+  Future<void> _editVin(BuildContext context, Vehicle vehicle) async {
+    final controller = TextEditingController(text: vehicle.vin ?? '');
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Vehicle VIN'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Optional. A VIN can improve vehicle-specific guidance. It stays on this device and is excluded from AI requests.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              maxLength: 17,
+              textCapitalization: TextCapitalization.characters,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(
+                  RegExp(r'[A-HJ-NPR-Za-hj-npr-z0-9]'),
+                ),
+                LengthLimitingTextInputFormatter(17),
+              ],
+              decoration: const InputDecoration(
+                labelText: '17-character VIN',
+                hintText: 'Skip or add it later',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (save == true) {
+      final vin = controller.text.trim().toUpperCase();
+      await VehicleService.instance.upsert(
+        vehicle.copyWith(vin: vin.isEmpty ? null : vin, clearVin: vin.isEmpty),
+      );
+    }
+    controller.dispose();
   }
 
   void _confirmDelete(BuildContext context, Vehicle v) {
@@ -122,11 +181,15 @@ class _VehicleCard extends StatelessWidget {
     required this.isSelected,
     required this.onTap,
     required this.onDelete,
+    required this.onEditVin,
+    required this.onEditDetails,
   });
   final Vehicle vehicle;
   final bool isSelected;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback onEditVin;
+  final VoidCallback onEditDetails;
 
   @override
   Widget build(BuildContext context) {
@@ -152,7 +215,8 @@ class _VehicleCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(vehicle.displayName,
-                            style: tt.titleLarge, maxLines: 1,
+                            style: tt.titleLarge,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis),
                       ),
                       if (isSelected)
@@ -171,17 +235,38 @@ class _VehicleCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${vehicle.fuelLabel} · ${vehicle.mileageKm > 0 ? '${vehicle.mileageKm} km' : 'No mileage'}',
+                    '${vehicle.category.label} · ${vehicle.detailsLabel}',
                     style: tt.bodyMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    vehicle.vin?.isNotEmpty == true
+                        ? 'VIN: ${vehicle.vin}'
+                        : 'VIN not added · add it later for specific guidance',
+                    style: tt.bodySmall?.copyWith(
+                      color: vehicle.vin?.isNotEmpty == true
+                          ? AppColors.textSecondary
+                          : AppColors.accent,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-            NeuIconButton(
-              icon: Icons.delete_outline_rounded,
-              size: 36,
-              color: const Color(0x88FF5252),
-              onPressed: onDelete,
+            PopupMenuButton<String>(
+              tooltip: 'Vehicle options',
+              onSelected: (value) {
+                if (value == 'details') onEditDetails();
+                if (value == 'vin') onEditVin();
+                if (value == 'delete') onDelete();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                    value: 'details', child: Text('Edit vehicle details')),
+                PopupMenuItem(value: 'vin', child: Text('Edit VIN')),
+                PopupMenuItem(value: 'delete', child: Text('Delete vehicle')),
+              ],
             ),
           ],
         ),

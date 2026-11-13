@@ -1,0 +1,31 @@
+[
+  {
+    "version": "1.1.0",
+    "title": "1.1.0 — Vehicle setup & reliability",
+    "date": "2026-11-13",
+    "status": "Release candidate — beta build 16 / final build 17",
+    "changes": [
+      "Direct make/model fields with a small offline autocomplete catalogue, custom entries, optional one/two-photo AI identification and a skip path. AI runs online through the backend.",
+      "Road-vehicle categories including SUVs, motorcycles, scooters, pickups, vans, trucks and buses. Diagnostic assistance does not imply verified OBD compatibility.",
+      "Unknown year, powertrain, mileage and service details remain unknown. VIN stays optional, local and editable.",
+      "Vehicle details can be edited later and the selected vehicle is restored after restart.",
+      "Clearer diagnosis choices, privacy and permission explanations, compatibility guidance, and in-app release notes.",
+      "More time for older Bluetooth adapters to connect and paired-device fallback when discovery fails.",
+      "Includes the Billing 9.1.0 and verified offline purchase-cache improvements introduced in v15.",
+      "Photo recognition and server purchase checks require the matching updated backend. Availability on Google Play depends on rollout."
+    ]
+  },
+  {
+    "version": "1.0.5",
+    "title": "1.0.5 — Billing & offline paid access",
+    "date": "2026-11-06",
+    "status": "Signed v15 build prepared; store rollout not confirmed",
+    "changes": [
+      "Upgraded RevenueCat Flutter SDK to 11.0.0 and Google Play Billing to 9.1.0.",
+      "Store/network failures preserve previously verified paid access within a bounded offline window.",
+      "Pro cache grace is limited to three days; Emergency Pass stays limited to 48 hours from purchase.",
+      "Pending payments do not grant new access; startup no longer waits for product or quota requests.",
+      "Restored the approved icon and splash artwork and preserved optional VIN persistence."
+    ]
+  }
+]

@@ -334,7 +334,7 @@ class _PhotoDiagnoseScreenState extends State<PhotoDiagnoseScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Take or upload up to 8 photos of the issue area.',
+            'Choose up to 8 photos of the issue area. Selected photos are sent to FixEase’s backend and AI provider; avoid unnecessary personal details.',
             style: tt.bodyMedium,
           ),
           const SizedBox(height: 12),

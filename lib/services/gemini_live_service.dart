@@ -192,7 +192,8 @@ class GeminiLiveService extends ChangeNotifier {
     _historySession = null;
     _historySessionSaved = false;
     _threadId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-    _obdContext = obdContext == null ? null : Map<String, dynamic>.from(obdContext);
+    _obdContext =
+        obdContext == null ? null : Map<String, dynamic>.from(obdContext);
     _syncAudioLimit();
     _state = LiveSessionState.connecting;
     notifyListeners();
@@ -475,13 +476,7 @@ class GeminiLiveService extends ChangeNotifier {
     final requestThreadId = _threadId;
     try {
       final body = <String, dynamic>{
-        'vehicle': _vehicle != null
-            ? {
-                'display_name': _vehicle!.displayName,
-                'fuel_label': _vehicle!.fuelLabel,
-                'mileage_km': _vehicle!.mileageKm,
-              }
-            : null,
+        'vehicle': _vehicle?.diagnosticContext,
         if (_obdContext != null && _obdContext!.isNotEmpty)
           'obd_context': _obdContext,
         'history': _messages
@@ -622,9 +617,8 @@ class GeminiLiveService extends ChangeNotifier {
               AiConfig.endpoint('/api/live/voice'),
               headers: {
                 'Content-Type': 'application/json',
-                'x-fixease-plan': SubscriptionService.instance.hasPremiumAccess
-                    ? 'pro'
-                    : 'free',
+                ...await SubscriptionService.instance
+                    .backendEntitlementHeaders(),
                 'x-fixease-device-id': deviceId,
                 'x-fixease-live-session-id': _threadId ?? '',
                 'x-fixease-consume-diagnostic':

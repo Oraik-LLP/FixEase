@@ -18,7 +18,7 @@ abstract final class CarImageService {
   static String imageUrl({
     required String make,
     required String model,
-    int year = 2024,
+    int? year,
     String angle = '23',
     String paintId = 'pspc0001',
   }) {
@@ -29,7 +29,7 @@ abstract final class CarImageService {
         '?customer=$_customer'
         '&make=$encodedMake'
         '&modelFamily=$encodedModel'
-        '&modelYear=$year'
+        '${year == null ? '' : '&modelYear=$year'}'
         '&angle=$angle'
         '&paintId=$paintId'
         '&width=800';

@@ -7,6 +7,7 @@ import 'package:open_filex/open_filex.dart';
 import '../config/app_config.dart';
 import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
+import '../models/obd.dart';
 import '../services/diagnostic_service.dart';
 import '../services/report_export_service.dart';
 import '../services/subscription_service.dart';
@@ -192,6 +193,136 @@ class _ReportExportButtonState extends State<ReportExportButton> {
       if (mounted) {
         setState(() => _isExporting = false);
       }
+    }
+  }
+}
+
+class RawObdReportExportButton extends StatefulWidget {
+  const RawObdReportExportButton({
+    super.key,
+    required this.session,
+    required this.record,
+  });
+
+  final DiagnosticSession session;
+  final ObdScanRecord record;
+
+  @override
+  State<RawObdReportExportButton> createState() =>
+      _RawObdReportExportButtonState();
+}
+
+class _RawObdReportExportButtonState extends State<RawObdReportExportButton> {
+  bool _isExporting = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Export raw OBD report',
+      onPressed: _isExporting ? null : () => _showActions(context),
+      icon: _isExporting
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.accent,
+              ),
+            )
+          : const Icon(Icons.ios_share_rounded, color: AppColors.accent),
+    );
+  }
+
+  Future<void> _showActions(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Raw OBD report PDF',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'This report contains the captured adapter data and local summaries, without AI analysis.',
+                style: Theme.of(sheetContext).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 18),
+              _ExportActionTile(
+                icon: Icons.share_rounded,
+                label: 'Share PDF',
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  await _run(
+                    context,
+                    () => ReportExportService.shareRawObdPdf(
+                      session: widget.session,
+                      record: widget.record,
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              _ExportActionTile(
+                icon: Icons.download_rounded,
+                label: 'Save PDF',
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  await _run(
+                    context,
+                    () => ReportExportService.saveRawObdPdf(
+                      session: widget.session,
+                      record: widget.record,
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _run(
+    BuildContext context,
+    Future<dynamic> Function() action,
+  ) async {
+    if (_isExporting) return;
+    setState(() => _isExporting = true);
+    try {
+      final result = await action();
+      if (result is File) {
+        await OpenFilex.open(result.path);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Raw report saved: ${result.uri.pathSegments.last}',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not export the raw OBD report.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 }

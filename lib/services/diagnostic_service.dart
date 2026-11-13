@@ -79,7 +79,12 @@ class DiagnosticService extends ChangeNotifier {
   }
 
   Future<void> save(DiagnosticSession s) async {
-    _sessions.insert(0, s);
+    final existingIndex = _sessions.indexWhere((session) => session.id == s.id);
+    if (existingIndex == -1) {
+      _sessions.insert(0, s);
+    } else {
+      _sessions[existingIndex] = s;
+    }
     _historyOrder.remove(s.id);
     _historyOrder.insert(0, s.id);
     notifyListeners();
@@ -109,8 +114,8 @@ class DiagnosticService extends ChangeNotifier {
   Future<void> _persist() {
     return Future.wait([
       LocalStoreService.writeJsonList(
-      _storageKey,
-      _sessions.map((s) => s.toJson()).toList(),
+        _storageKey,
+        _sessions.map((s) => s.toJson()).toList(),
       ),
       LocalStoreService.writeJsonList(
         _historyKey,

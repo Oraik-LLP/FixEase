@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 
 import '../config/app_config.dart';
@@ -12,9 +14,10 @@ import 'conversation_service.dart';
 import 'diagnostic_service.dart';
 import 'local_store_service.dart';
 import 'quota_service.dart';
+import 'subscription_access_policy.dart';
 import 'trusted_time_service.dart';
 
-enum SubscriptionTier { free, emergencyPass, pro }
+export 'subscription_access_policy.dart' show SubscriptionTier;
 
 enum DemoSubscriptionState { mockFree, mockPass, mockPro }
 
@@ -257,8 +260,21 @@ class SubscriptionService extends ChangeNotifier {
   bool _isPurchasing = false;
   bool _isRestoring = false;
   String? _lastSyncErrorMessage;
+  Future<void>? _configurationFuture;
+  Future<void>? _refreshFuture;
+  Timer? _accessExpiryTimer;
+  final Stopwatch _elapsed = Stopwatch()..start();
+  final DateTime _clockAnchor = DateTime.now().toUtc();
+  DateTime? _accessClockHighWater;
+  DateTime? _accessValidUntil;
+  static const _storeTimeout = Duration(seconds: 8);
+  static const _restoreTimeout = Duration(seconds: 25);
 
-  SubscriptionTier get tier => _tier;
+  SubscriptionTier get tier {
+    _refreshEntitlementAccess();
+    return _tier;
+  }
+
   DemoSubscriptionState get demoState => _demoState;
   DateTime? get emergencyExpiresAt => _emergencyExpiresAt;
   Offerings? get offerings => _offerings;
@@ -274,13 +290,27 @@ class SubscriptionService extends ChangeNotifier {
       : (AppConfig.freeDiagnosticsPerMonth - _diagnosticsThisMonth)
           .clamp(0, AppConfig.freeDiagnosticsPerMonth)
           .toInt();
-  bool get isUnlimited => _tier != SubscriptionTier.free;
+  bool get isUnlimited => tier != SubscriptionTier.free;
   bool get canDiagnose =>
       isUnlimited || _diagnosticsThisMonth < AppConfig.freeDiagnosticsPerMonth;
-  bool get hasPremiumAccess => _tier != SubscriptionTier.free;
+  bool get hasPremiumAccess => tier != SubscriptionTier.free;
   Duration get liveAudioLimit => hasPremiumAccess
       ? const Duration(minutes: 10)
       : const Duration(minutes: 3);
+
+  Future<Map<String, String>> backendEntitlementHeaders() async {
+    if (!AppConfig.isDemoMode && _customerInfo == null) {
+      await _refreshStoreState(
+          includeOfferings: false, source: 'backendRequest');
+    }
+    final paid = !AppConfig.isDemoMode && hasPremiumAccess;
+    return {
+      'x-fixease-plan': paid ? 'pro' : 'free',
+      if (paid)
+        'x-fixease-customer-id':
+            await Purchases.appUserID.timeout(_storeTimeout),
+    };
+  }
 
   ThreadLimitStatus threadLimitStatus({
     required String sessionId,
@@ -295,7 +325,7 @@ class SubscriptionService extends ChangeNotifier {
     );
   }
 
-  String get tierLabel => switch (_tier) {
+  String get tierLabel => switch (tier) {
         SubscriptionTier.free => 'Free',
         SubscriptionTier.emergencyPass => 'Emergency Pass',
         SubscriptionTier.pro => 'Pro Driver',
@@ -313,7 +343,7 @@ class SubscriptionService extends ChangeNotifier {
   Future<void> restore() async {
     await _loadPersisted();
     _syncThreadUsageFromLocalData();
-    await refreshMonthlyCreditsForDisplay();
+    unawaited(refreshMonthlyCreditsForDisplay());
 
     if (AppConfig.isDemoMode) {
       _applyDemoState(_demoState);
@@ -321,12 +351,14 @@ class SubscriptionService extends ChangeNotifier {
       return;
     }
 
-    await _refreshStoreState(includeOfferings: true, source: 'restore');
+    // Startup must render even if Play or the network is unavailable. The SDK
+    // returns its persisted CustomerInfo cache independently of product loading.
+    unawaited(_refreshStoreState(includeOfferings: true, source: 'restore'));
   }
 
   Future<void> refresh() async {
     _syncThreadUsageFromLocalData();
-    await refreshMonthlyCreditsForDisplay();
+    unawaited(refreshMonthlyCreditsForDisplay());
 
     if (AppConfig.isDemoMode) {
       _applyDemoState(_demoState);
@@ -355,14 +387,19 @@ class SubscriptionService extends ChangeNotifier {
       }
 
       await _configurePurchasesIfNeeded();
+      if (!_configuredPurchases) return false;
+      if (productForType(type)?.livePackage == null) await _loadOfferings();
       final livePackage = productForType(type)?.livePackage;
       if (livePackage == null) return false;
 
-      final info = await Purchases.purchasePackage(livePackage);
+      final result =
+          await Purchases.purchase(PurchaseParams.package(livePackage));
       _lastSyncErrorMessage = null;
-      _applyCustomerInfo(info);
+      _applyCustomerInfo(result.customerInfo);
       notifyListeners();
-      return true;
+      return SubscriptionAccessPolicy.isTrusted(result.customerInfo,
+              allowDeviceVerification: Platform.isIOS) &&
+          hasPremiumAccess;
     } catch (error, stackTrace) {
       _recordSyncFailure(
         source: 'purchaseProduct',
@@ -384,34 +421,36 @@ class SubscriptionService extends ChangeNotifier {
     );
   }
 
-  Future<void> restorePurchases() async {
-    if (_isRestoring) return;
+  Future<bool> restorePurchases() async {
+    if (_isRestoring) return false;
     _isRestoring = true;
     notifyListeners();
 
     try {
       if (AppConfig.isDemoMode) {
         _applyDemoState(_demoState);
-        return;
+        return hasPremiumAccess;
       }
 
       await _configurePurchasesIfNeeded();
       if (!_configuredPurchases) {
-        _applyStrictEntitlementFallback(clearCustomerInfo: true);
         _lastSyncErrorMessage =
             'Subscription status could not be verified because RevenueCat is not configured.';
-        return;
+        return false;
       }
-      final info = await Purchases.restorePurchases();
+      final info = await Purchases.restorePurchases().timeout(_restoreTimeout);
       _lastSyncErrorMessage = null;
       _applyCustomerInfo(info);
+      return SubscriptionAccessPolicy.isTrusted(info,
+              allowDeviceVerification: Platform.isIOS) &&
+          hasPremiumAccess;
     } catch (error, stackTrace) {
-      _applyStrictEntitlementFallback(clearCustomerInfo: true);
       _recordSyncFailure(
         source: 'restorePurchases',
         error: error,
         stackTrace: stackTrace,
       );
+      return false;
     } finally {
       _isRestoring = false;
       notifyListeners();
@@ -419,6 +458,7 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   Future<void> setDemoState(DemoSubscriptionState state) async {
+    if (!AppConfig.isDemoMode) return;
     _demoState = state;
     _applyDemoState(state);
     await _persist();
@@ -768,15 +808,24 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> _configurePurchasesIfNeeded() async {
     if (_configuredPurchases || AppConfig.isDemoMode) return;
+    await (_configurationFuture ??= _configurePurchases().whenComplete(() {
+      _configurationFuture = null;
+    }));
+  }
+
+  Future<void> _configurePurchases() async {
     final apiKey = Platform.isIOS
         ? AppConfig.revenueCatIosApiKey
         : AppConfig.revenueCatAndroidApiKey;
-    if (apiKey.trim().isEmpty) return;
+    final prefix = Platform.isIOS ? 'appl_' : 'goog_';
+    if (!apiKey.startsWith(prefix)) return;
 
     await Purchases.setLogLevel(
       kDebugMode ? LogLevel.debug : LogLevel.warn,
-    );
-    await Purchases.configure(PurchasesConfiguration(apiKey));
+    ).timeout(_storeTimeout);
+    final configuration = PurchasesConfiguration(apiKey)
+      ..entitlementVerificationMode = EntitlementVerificationMode.informational;
+    await Purchases.configure(configuration).timeout(_storeTimeout);
     Purchases.addCustomerInfoUpdateListener(_applyCustomerInfo);
     _configuredPurchases = true;
   }
@@ -796,80 +845,115 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   void _applyCustomerInfo(CustomerInfo info) {
-    _lastSyncErrorMessage = null;
+    if (!SubscriptionAccessPolicy.isTrusted(info,
+        allowDeviceVerification: Platform.isIOS)) {
+      _refreshEntitlementAccess();
+      _lastSyncErrorMessage = hasPremiumAccess
+          ? 'Store verification is unavailable. Your previously verified paid access remains available temporarily.'
+          : 'Connect to securely verify your purchases before using paid access.';
+      notifyListeners();
+      return;
+    }
+    final previousDate = DateTime.tryParse(_customerInfo?.requestDate ?? '');
+    final incomingDate = DateTime.tryParse(info.requestDate);
+    if (previousDate != null &&
+        incomingDate != null &&
+        incomingDate.isBefore(previousDate)) {
+      // A late background refresh must not overwrite a newer purchase/revocation.
+      return;
+    }
     _customerInfo = info;
-
-    final active = info.entitlements.active;
-    if (active.containsKey(AppConfig.entitlementProId)) {
-      _tier = SubscriptionTier.pro;
-      _emergencyExpiresAt = null;
-      _persist();
-      return;
-    }
-
-    final emergency = info.entitlements.all[AppConfig.entitlementEmergencyId];
-    final expiry = _resolveEmergencyExpiry(emergency);
-    final emergencyActive = emergency?.isActive == true ||
-        (expiry != null && expiry.isAfter(DateTime.now()));
-    if (emergencyActive) {
-      _tier = SubscriptionTier.emergencyPass;
-      _emergencyExpiresAt = expiry;
-      _persist();
-      return;
-    }
-
-    _tier = SubscriptionTier.free;
-    _emergencyExpiresAt = expiry;
-    _persist();
+    _lastSyncErrorMessage = null;
+    _refreshEntitlementAccess();
+    notifyListeners();
   }
 
   Future<void> _refreshStoreState({
     required bool includeOfferings,
     required String source,
+  }) {
+    return _refreshFuture ??= _syncStoreState(
+      includeOfferings: includeOfferings,
+      source: source,
+    ).whenComplete(() => _refreshFuture = null);
+  }
+
+  Future<void> _syncStoreState({
+    required bool includeOfferings,
+    required String source,
   }) async {
     _lastSyncErrorMessage = null;
-    await _configurePurchasesIfNeeded();
-    if (!_configuredPurchases) {
-      _applyStrictEntitlementFallback(clearCustomerInfo: true);
-      _lastSyncErrorMessage =
-          'Subscription status could not be verified because RevenueCat is not configured.';
-      notifyListeners();
-      return;
-    }
-
-    if (includeOfferings) {
-      try {
-        _offerings = await Purchases.getOfferings();
-      } catch (error, stackTrace) {
-        _offerings = null;
-        _recordSyncFailure(
-          source: '$source:getOfferings',
-          error: error,
-          stackTrace: stackTrace,
-        );
-      }
-    }
-
     try {
-      final info = await Purchases.getCustomerInfo();
+      await _configurePurchasesIfNeeded();
+      if (!_configuredPurchases) {
+        throw StateError(
+            'RevenueCat is not configured with a platform SDK key.');
+      }
+      // Fetch cached entitlements before products: Play's product lookup can
+      // fail offline even while this customer's paid cache remains valid.
+      var info = await Purchases.getCustomerInfo().timeout(_storeTimeout);
+      if (info.entitlements.verification == VerificationResult.notRequested) {
+        // One online refresh migrates older unsigned SDK caches. Never turn
+        // an editable local paid flag into a trusted offline entitlement.
+        await Purchases.invalidateCustomerInfoCache().timeout(_storeTimeout);
+        info = await Purchases.getCustomerInfo().timeout(_storeTimeout);
+      }
       _applyCustomerInfo(info);
     } catch (error, stackTrace) {
-      _applyStrictEntitlementFallback(clearCustomerInfo: true);
       _recordSyncFailure(
         source: '$source:getCustomerInfo',
         error: error,
         stackTrace: stackTrace,
       );
     }
-
+    if (includeOfferings && _configuredPurchases) unawaited(_loadOfferings());
     notifyListeners();
   }
 
-  void _applyStrictEntitlementFallback({bool clearCustomerInfo = false}) {
-    _tier = SubscriptionTier.free;
-    _emergencyExpiresAt = null;
-    if (clearCustomerInfo) {
-      _customerInfo = null;
+  Future<void> _loadOfferings() async {
+    try {
+      _offerings = await Purchases.getOfferings().timeout(_storeTimeout);
+    } catch (_) {
+      // Product availability affects new purchases, never existing paid access.
+    }
+    notifyListeners();
+  }
+
+  DateTime _entitlementNow() {
+    var now = DateTime.now().toUtc();
+    final monotonic = _clockAnchor.add(_elapsed.elapsed);
+    if (monotonic.isAfter(now)) now = monotonic;
+    if (_accessClockHighWater?.isAfter(now) == true) {
+      now = _accessClockHighWater!;
+    }
+    _accessClockHighWater = now;
+    return now;
+  }
+
+  void _refreshEntitlementAccess() {
+    if (AppConfig.isDemoMode) return;
+    final info = _customerInfo;
+    final access = info == null
+        ? const SubscriptionAccess(SubscriptionTier.free)
+        : SubscriptionAccessPolicy.evaluate(info, _entitlementNow(),
+            allowDeviceVerification: Platform.isIOS);
+    _tier = access.tier;
+    _emergencyExpiresAt = access.tier == SubscriptionTier.emergencyPass
+        ? access.validUntil
+        : null;
+    if (access.message != null) _lastSyncErrorMessage = access.message;
+    if (_accessValidUntil != access.validUntil) {
+      _accessExpiryTimer?.cancel();
+      _accessValidUntil = access.validUntil;
+      if (access.validUntil != null) {
+        final remaining = access.validUntil!.difference(_entitlementNow());
+        if (remaining > Duration.zero) {
+          _accessExpiryTimer = Timer(remaining, () {
+            _refreshEntitlementAccess();
+            notifyListeners();
+          });
+        }
+      }
     }
   }
 
@@ -880,35 +964,28 @@ class SubscriptionService extends ChangeNotifier {
   }) {
     final message =
         'Subscription verification failed during $source: ${error.toString()}';
-    _lastSyncErrorMessage =
-        'Subscription status could not be verified. Premium access is '
-        'temporarily locked until the store connection is restored.';
+    _refreshEntitlementAccess();
+    if (error is PlatformException) {
+      final code = PurchasesErrorHelper.getErrorCode(error);
+      if (code == PurchasesErrorCode.paymentPendingError) {
+        _lastSyncErrorMessage =
+            'Your payment is pending store confirmation. New paid access starts after confirmation; any previously verified access remains available.';
+        return;
+      }
+      if (code == PurchasesErrorCode.purchaseCancelledError) {
+        _lastSyncErrorMessage =
+            'Purchase cancelled. Your existing access is unchanged.';
+        return;
+      }
+    }
+    _lastSyncErrorMessage = hasPremiumAccess
+        ? 'The store could not refresh your purchases. Previously verified paid access is still available temporarily; reconnect to refresh it.'
+        : 'Connect to the internet to verify or refresh your paid access.';
     debugPrint(message);
     debugPrintStack(
       stackTrace: stackTrace,
       label: 'SubscriptionService sync failure',
     );
-  }
-
-  DateTime? _resolveEmergencyExpiry(EntitlementInfo? entitlement) {
-    if (entitlement == null) return null;
-    final explicit = _parseRevenueCatDate(entitlement.expirationDate);
-    if (explicit != null) return explicit;
-
-    final purchaseDate = _parseRevenueCatDate(entitlement.latestPurchaseDate);
-    if (purchaseDate != null) {
-      return purchaseDate.add(const Duration(hours: 48));
-    }
-    return null;
-  }
-
-  DateTime? _parseRevenueCatDate(Object? raw) {
-    if (raw == null) return null;
-    if (raw is DateTime) return raw;
-    if (raw is String && raw.isNotEmpty) {
-      return DateTime.tryParse(raw);
-    }
-    return null;
   }
 
   Future<void> _loadPersisted() async {
@@ -986,6 +1063,10 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   void _expireEmergencyIfNeeded() {
+    if (!AppConfig.isDemoMode) {
+      _refreshEntitlementAccess();
+      return;
+    }
     final expiry = _emergencyExpiresAt;
     if (_tier == SubscriptionTier.emergencyPass &&
         expiry != null &&
@@ -993,6 +1074,15 @@ class SubscriptionService extends ChangeNotifier {
       _tier = SubscriptionTier.free;
       _emergencyExpiresAt = null;
     }
+  }
+
+  @override
+  void dispose() {
+    _accessExpiryTimer?.cancel();
+    if (_configuredPurchases) {
+      Purchases.removeCustomerInfoUpdateListener(_applyCustomerInfo);
+    }
+    super.dispose();
   }
 
   String _featureReason(FeatureType feature) => switch (feature) {

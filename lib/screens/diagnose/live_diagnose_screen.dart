@@ -3,6 +3,7 @@ import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../../widgets/permission_purpose.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 
@@ -47,7 +48,8 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
     super.initState();
     final vehicleId = VehicleService.instance.selected?.id;
     if (vehicleId != null) {
-      _useObdInsight = ObdProService.instance.isPromptInjectionEnabled(vehicleId);
+      _useObdInsight =
+          ObdProService.instance.isPromptInjectionEnabled(vehicleId);
     }
     _initCamera();
     _runChecks();
@@ -58,7 +60,8 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
   }) {
     final vehicleId = VehicleService.instance.selected?.id;
     if (vehicleId == null) return null;
-    final context = ObdProService.instance.latestPromptContextForVehicle(vehicleId);
+    final context =
+        ObdProService.instance.latestPromptContextForVehicle(vehicleId);
     if (context == null) return null;
     if (respectToggle && !_useObdInsight) return null;
     return context.toJson();
@@ -263,8 +266,17 @@ class _LiveDiagnoseScreenState extends State<LiveDiagnoseScreen> {
         )) {
       return;
     }
+    if (!mounted) return;
     HapticFeedback.mediumImpact();
     try {
+      if (!GeminiLiveService.instance.isRecording) {
+        final allowed = await PermissionPurpose.explain(context,
+            feature: 'voice',
+            title: 'Voice assistance',
+            purpose:
+                'The microphone records a turn when you start it. The selected recording is sent to FixEase’s backend and AI provider. You can use text instead.');
+        if (!allowed || !mounted) return;
+      }
       await GeminiLiveService.instance.toggleRecording();
     } on LiveSessionPermissionException catch (error) {
       if (!mounted) return;

@@ -500,8 +500,8 @@ class _GarageDashboard extends StatelessWidget {
                   label: 'Schedule 2-Minute Ping',
                   icon: Icons.notifications_active_rounded,
                   onPressed: () async {
-                    final scheduledFor =
-                        await ReminderSchedulerService.instance.scheduleTestReminder(
+                    final scheduledFor = await ReminderSchedulerService.instance
+                        .scheduleTestReminder(
                       profile: profile,
                       vehicle: vehicle,
                     );
@@ -620,6 +620,7 @@ class _GarageSetupWizardState extends State<GarageSetupWizard> {
   late final TextEditingController _mileageCtrl;
   late final TextEditingController _oilMileageCtrl;
   late DateTime _lastOilChangeDate;
+  bool _serviceDateKnown = false;
   bool _tiresOlderThanFourYears = false;
   DateTime? _tireInstalledDate;
   DateTime? _registrationDueDate;
@@ -631,14 +632,20 @@ class _GarageSetupWizardState extends State<GarageSetupWizard> {
     final existing = widget.existing;
     _step = widget.initialStep.clamp(0, 4);
     _mileageCtrl = TextEditingController(
-      text: (existing?.currentMileageKm ?? widget.vehicle.mileageKm).toString(),
+      text: (existing?.currentMileageKm ?? widget.vehicle.mileageKm)
+              ?.toString() ??
+          '',
     );
     _oilMileageCtrl = TextEditingController(
       text: (existing?.lastOilChangeMileageKm ?? widget.vehicle.mileageKm)
-          .toString(),
+              ?.toString() ??
+          '',
     );
-    _lastOilChangeDate =
-        existing?.lastOilChangeDate ?? widget.vehicle.lastServiceDate ?? DateTime.now();
+    _lastOilChangeDate = existing?.lastOilChangeDate ??
+        widget.vehicle.lastServiceDate ??
+        DateTime.now();
+    _serviceDateKnown =
+        existing != null || widget.vehicle.lastServiceDate != null;
     _tiresOlderThanFourYears = existing?.tiresOlderThanFourYears ?? false;
     _tireInstalledDate = existing?.tireInstalledDate;
     _registrationDueDate = existing?.registrationDueDate;
@@ -676,10 +683,16 @@ class _GarageSetupWizardState extends State<GarageSetupWizard> {
       return;
     }
 
+    final mileage =
+        int.tryParse(_mileageCtrl.text.trim()) ?? widget.vehicle.mileageKm;
+    final oilMileage = int.tryParse(_oilMileageCtrl.text.trim()) ?? mileage;
+    if (mileage == null || oilMileage == null || !_serviceDateKnown) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Add mileage and the last oil-change date to calculate reminders, or close this setup and add them later.')));
+      return;
+    }
     setState(() => _saving = true);
-    final mileage = int.tryParse(_mileageCtrl.text.trim()) ?? widget.vehicle.mileageKm;
-    final oilMileage =
-        int.tryParse(_oilMileageCtrl.text.trim()) ?? mileage;
     final now = DateTime.now();
     final profile = GarageProfile(
       vehicleId: widget.vehicle.id,
@@ -771,14 +784,19 @@ class _GarageSetupWizardState extends State<GarageSetupWizard> {
                           child: _DatePromptTile(
                             icon: Icons.event_rounded,
                             label: 'Last oil change date',
-                            value: _formatDate(_lastOilChangeDate),
+                            value: _serviceDateKnown
+                                ? _formatDate(_lastOilChangeDate)
+                                : 'Unknown — choose a date',
                             onTap: () async {
                               final picked = await _pickDate(
                                 context,
                                 initial: _lastOilChangeDate,
                               );
                               if (picked == null) return;
-                              setState(() => _lastOilChangeDate = picked);
+                              setState(() {
+                                _lastOilChangeDate = picked;
+                                _serviceDateKnown = true;
+                              });
                             },
                           ),
                         ),
@@ -842,7 +860,8 @@ class _GarageSetupWizardState extends State<GarageSetupWizard> {
                                   onTap: () async {
                                     final picked = await _pickDate(
                                       context,
-                                      initial: _tireInstalledDate ?? DateTime.now(),
+                                      initial:
+                                          _tireInstalledDate ?? DateTime.now(),
                                     );
                                     if (picked == null) return;
                                     setState(() => _tireInstalledDate = picked);
@@ -929,16 +948,17 @@ class _GarageSetupWizardState extends State<GarageSetupWizard> {
     switch (_step) {
       case 0:
         if (_mileageCtrl.text.trim().isEmpty) {
-          _mileageCtrl.text = widget.vehicle.mileageKm.toString();
+          _mileageCtrl.text = widget.vehicle.mileageKm?.toString() ?? '';
         }
         break;
       case 1:
         break;
       case 2:
         if (_oilMileageCtrl.text.trim().isEmpty) {
-          _oilMileageCtrl.text =
-              (int.tryParse(_mileageCtrl.text.trim()) ?? widget.vehicle.mileageKm)
-                  .toString();
+          _oilMileageCtrl.text = (int.tryParse(_mileageCtrl.text.trim()) ??
+                      widget.vehicle.mileageKm)
+                  ?.toString() ??
+              '';
         }
         break;
       case 3:
@@ -1236,7 +1256,8 @@ class _GarageStatusCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (secondaryActionLabel != null && onSecondaryAction != null)
+                    if (secondaryActionLabel != null &&
+                        onSecondaryAction != null)
                       GestureDetector(
                         onTap: () async {
                           HapticFeedback.selectionClick();
@@ -1337,14 +1358,16 @@ class _GarageDueState {
       return const _GarageDueState(
         status: GarageHealthStatus.overdue,
         primaryText: 'An age-based tire check is due',
-        secondaryText: 'Inspect tread, sidewall condition, rotation wear, and age markings.',
+        secondaryText:
+            'Inspect tread, sidewall condition, rotation wear, and age markings.',
       );
     }
     if (dueDate == null) {
       return const _GarageDueState(
         status: GarageHealthStatus.dueSoon,
         primaryText: 'Tire age details not set yet',
-        secondaryText: 'Add an approximate install date later if you want age-based reminders.',
+        secondaryText:
+            'Add an approximate install date later if you want age-based reminders.',
       );
     }
     final now = DateTime.now();
@@ -1353,14 +1376,16 @@ class _GarageDueState {
       return _GarageDueState(
         status: GarageHealthStatus.overdue,
         primaryText: 'An age-based tire check is overdue',
-        secondaryText: 'The 4-year check point passed on ${_formatDate(dueDate)}',
+        secondaryText:
+            'The 4-year check point passed on ${_formatDate(dueDate)}',
       );
     }
     if (daysRemaining <= 30) {
       return _GarageDueState(
         status: GarageHealthStatus.dueSoon,
         primaryText: 'An age-based tire check is coming up soon',
-        secondaryText: 'The 4-year check point lands on ${_formatDate(dueDate)}',
+        secondaryText:
+            'The 4-year check point lands on ${_formatDate(dueDate)}',
       );
     }
     return _GarageDueState(

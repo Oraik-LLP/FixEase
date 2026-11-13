@@ -5,6 +5,8 @@
 .flutter-plugins-dependencies
 .metadata
 build/
+finrel/
+*.log
 
 # IDE
 .idea/
@@ -17,3 +19,6 @@ ios/Pods/
 # Secrets
 .env
 .*
+!.github/
+!.github/workflows/
+!.github/workflows/ios-release.yml

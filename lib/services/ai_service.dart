@@ -13,6 +13,7 @@ import '../models/conversation.dart';
 import '../models/diagnostic.dart';
 import '../models/obd.dart';
 import '../models/vehicle.dart';
+import '../models/vehicle_recognition.dart';
 import 'device_identity_service.dart';
 import 'subscription_service.dart';
 
@@ -21,6 +22,13 @@ class AiService {
   AiService._();
   static final instance = AiService._();
   static const _retryDelay = Duration(seconds: 5);
+
+  Future<VehicleRecognition> recognizeVehicle(List<File> photos) async {
+    final json = await _postJson('/api/vehicles/recognize', {
+      'images': await _encodeFiles(photos.take(2).toList()),
+    });
+    return VehicleRecognition.fromJson(json);
+  }
 
   Future<AiDiagnosticResponse> analyzeSymptoms({
     required Vehicle vehicle,
@@ -117,6 +125,9 @@ class AiService {
     }
 
     try {
+      final staticSnapshot = Map<String, dynamic>.from(
+        record.staticSnapshot.toJson(),
+      )..remove('vin');
       final payload = await _postJsonWithRetry(
         '/api/diagnose/obd-pro',
         {
@@ -126,7 +137,7 @@ class AiService {
           'completion_reason': record.completionReason.name,
           'target_duration_seconds': record.targetDurationSeconds,
           'captured_duration_seconds': record.capturedDurationSeconds,
-          'static_snapshot': record.staticSnapshot.toJson(),
+          'static_snapshot': staticSnapshot,
           'processed_scan': record.processedScan.toJson(),
         },
       );
@@ -269,7 +280,7 @@ class AiService {
           AiConfig.endpoint(path),
           headers: {
             'Content-Type': 'application/json',
-            'x-fixease-plan': _requestPlanHeader,
+            ...await SubscriptionService.instance.backendEntitlementHeaders(),
             'x-fixease-device-id': deviceId,
           },
           body: encodedBody,
@@ -331,25 +342,19 @@ class AiService {
     return Map<String, dynamic>.from(decoded);
   }
 
-  String get _requestPlanHeader =>
-      SubscriptionService.instance.hasPremiumAccess ? 'pro' : 'free';
-
-  Map<String, dynamic> _vehiclePayload(Vehicle vehicle) => {
-        'display_name': vehicle.displayName,
-        'fuel_label': vehicle.fuelLabel,
-        'mileage_km': vehicle.mileageKm,
-        'last_service_date': vehicle.lastServiceDate?.toIso8601String(),
-      };
+  Map<String, dynamic> _vehiclePayload(Vehicle vehicle) =>
+      vehicle.diagnosticContext;
 
   Map<String, dynamic> _conversationVehiclePayload(
     Vehicle? vehicle,
     DiagnosticSession session,
   ) =>
       {
+        ...?vehicle?.diagnosticContext,
         'display_name':
             vehicle?.displayName ?? session.vehicleName ?? 'Unknown vehicle',
         'fuel_label': vehicle?.fuelLabel ?? 'Unknown',
-        'mileage_km': vehicle?.mileageKm ?? 0,
+        'mileage_km': vehicle?.mileageKm,
         'last_service_date': vehicle?.lastServiceDate?.toIso8601String(),
       };
 

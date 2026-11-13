@@ -109,7 +109,7 @@ class QuotaService extends ChangeNotifier {
       headers: {
         'Content-Type': 'application/json',
         'x-fixease-device-id': deviceId,
-        'x-fixease-plan': _requestPlanHeader,
+        ...await SubscriptionService.instance.backendEntitlementHeaders(),
       },
     ).timeout(const Duration(seconds: 15));
 
@@ -179,7 +179,7 @@ class QuotaService extends ChangeNotifier {
           headers: {
             'Content-Type': 'application/json',
             'x-fixease-device-id': deviceId,
-            'x-fixease-plan': _requestPlanHeader,
+            ...await SubscriptionService.instance.backendEntitlementHeaders(),
             'x-fixease-testing-reset': 'true',
           },
         )
@@ -207,8 +207,6 @@ class QuotaService extends ChangeNotifier {
     return Map<String, dynamic>.from(decoded);
   }
 
-  String get _requestPlanHeader =>
-      SubscriptionService.instance.hasPremiumAccess ? 'pro' : 'free';
 
   String? _resetSummary(DateTime? resetAt) {
     if (resetAt == null) return null;

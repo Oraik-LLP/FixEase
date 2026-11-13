@@ -10,6 +10,8 @@ import 'package:printing/printing.dart';
 
 import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
+import '../models/obd.dart';
+import 'obd_processing_service.dart';
 
 /// Builds and exports diagnostic reports as PDFs.
 abstract final class ReportExportService {
@@ -35,6 +37,287 @@ abstract final class ReportExportService {
     await Printing.sharePdf(
       bytes: bytes,
       filename: fileName(session),
+    );
+  }
+
+  static Future<File> saveRawObdPdf({
+    required DiagnosticSession session,
+    required ObdScanRecord record,
+  }) async {
+    final pdf = _buildRawObdPdf(session: session, record: record);
+    final bytes = await pdf.save();
+    final dir = await _resolveSaveDirectory();
+    final path = p.join(dir.path, rawObdFileName(session));
+    await Isolate.run(
+      () => File(path).writeAsBytesSync(bytes, flush: true),
+    );
+    return File(path);
+  }
+
+  static Future<void> shareRawObdPdf({
+    required DiagnosticSession session,
+    required ObdScanRecord record,
+  }) async {
+    final pdf = _buildRawObdPdf(session: session, record: record);
+    await Printing.sharePdf(
+      bytes: await pdf.save(),
+      filename: rawObdFileName(session),
+    );
+  }
+
+  static String rawObdFileName(DiagnosticSession session) {
+    final date = session.createdAt.toIso8601String().split('T').first;
+    return 'fixease_obd_raw_${date}_${session.id}.pdf';
+  }
+
+  static pw.Document _buildRawObdPdf({
+    required DiagnosticSession session,
+    required ObdScanRecord record,
+  }) {
+    final pdf = pw.Document();
+    final stats = record.kind == ObdScanKind.idle
+        ? record.processedScan.idleStats
+        : record.processedScan.timelineSummary;
+    final snapshot = record.staticSnapshot;
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageTheme: const pw.PageTheme(margin: pw.EdgeInsets.all(30)),
+        footer: (context) => pw.Align(
+          alignment: pw.Alignment.center,
+          child: pw.Text(
+            'FixEase raw OBD record · ${context.pageNumber}',
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+          ),
+        ),
+        build: (context) => [
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(18),
+            decoration: pw.BoxDecoration(
+              color: PdfColor.fromHex('#111114'),
+              borderRadius: pw.BorderRadius.circular(12),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  'OBD-II Scan Report',
+                  style: pw.TextStyle(
+                    color: PdfColors.white,
+                    fontSize: 20,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 7),
+                pw.Text(
+                  session.vehicleName ?? 'Unknown vehicle',
+                  style: pw.TextStyle(
+                    color: PdfColor.fromHex('#8DBDFF'),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 16),
+          pw.Text(
+            'Raw scan record · No AI diagnosis included',
+            style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 5),
+          pw.Text(
+            'This report contains data returned by the OBD adapter and simple local summaries only. It is not a confirmed diagnosis.',
+            style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+          ),
+          pw.SizedBox(height: 16),
+          _section('Scan details', [
+            _detailRow('Scan type', record.kind.name.toUpperCase()),
+            _detailRow(
+                'Date and time', '${session.dateLabel} · ${session.timeLabel}'),
+            _detailRow(
+              'Status',
+              record.isPartial ? 'Partial / interrupted' : 'Completed',
+            ),
+            _detailRow(
+              'Duration',
+              '${record.capturedDurationSeconds}s of ${record.targetDurationSeconds}s',
+            ),
+            _detailRow('Completion', record.completionReason.name),
+            _detailRow('Samples', record.processedScan.sampleCount.toString()),
+          ]),
+          if (snapshot.hasAnyData) ...[
+            _section('Vehicle data returned', [
+              if (snapshot.vin?.trim().isNotEmpty == true)
+                _detailRow('VIN', snapshot.vin!.trim()),
+              if (snapshot.storedDtcs.isNotEmpty)
+                _detailRow('Stored DTCs', snapshot.storedDtcs.join(', ')),
+              if (snapshot.pendingDtcs.isNotEmpty)
+                _detailRow('Pending DTCs', snapshot.pendingDtcs.join(', ')),
+              if (snapshot.controlModuleVoltage != null)
+                _detailRow(
+                  'Module voltage',
+                  '${snapshot.controlModuleVoltage!.toStringAsFixed(2)} V',
+                ),
+              if (snapshot.distanceSinceCodesClearedKm != null)
+                _detailRow(
+                  'Distance since clear',
+                  '${snapshot.distanceSinceCodesClearedKm} km',
+                ),
+              if (snapshot.ambientAirTempC != null)
+                _detailRow(
+                  'Ambient air',
+                  '${snapshot.ambientAirTempC!.toStringAsFixed(1)} C',
+                ),
+            ]),
+          ],
+          if (stats.isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            pw.Text(
+              'Local telemetry summary',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 5),
+            pw.Text(
+              'Bars compare minimum, average and maximum readings for each available metric.',
+              style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+            ),
+            pw.SizedBox(height: 12),
+            ...stats.entries
+                .map((entry) => _rawObdMetric(entry.key, entry.value)),
+          ] else
+            _section('Telemetry', [
+              _detailRow('Result',
+                  'No telemetry samples were received during this scan.'),
+            ]),
+          if (record.kind == ObdScanKind.drive &&
+              record.processedScan.driveTimeline.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            _driveTimelineChart(record),
+          ],
+          pw.SizedBox(height: 14),
+          pw.Text(
+            'Use this record as supporting information for a qualified technician. Verify readings with suitable diagnostic equipment before making repair decisions.',
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+          ),
+        ],
+      ),
+    );
+    return pdf;
+  }
+
+  static pw.Widget _rawObdMetric(String key, ObdMetricStats stats) {
+    final label = ObdMetricCatalog.labels[key] ?? key;
+    final unit = ObdMetricCatalog.units[key] ?? '';
+    final magnitudes = [
+      stats.minimum.abs(),
+      stats.average.abs(),
+      stats.maximum.abs(),
+    ];
+    final maxMagnitude = magnitudes.reduce((a, b) => a > b ? a : b);
+    final scale = maxMagnitude == 0 ? 1.0 : maxMagnitude;
+    final bars = [stats.minimum, stats.average, stats.maximum];
+    final valueText = [
+      'Min ',
+      stats.minimum.toStringAsFixed(1),
+      ' ',
+      unit,
+      ' · Avg ',
+      stats.average.toStringAsFixed(1),
+      ' ',
+      unit,
+      ' · Max ',
+      stats.maximum.toStringAsFixed(1),
+      ' ',
+      unit,
+    ].join();
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 12),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.center,
+        children: [
+          pw.SizedBox(
+            width: 105,
+            child: pw.Text(label,
+                style:
+                    pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+          ),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              for (var i = 0; i < bars.length; i++)
+                pw.Padding(
+                  padding: const pw.EdgeInsets.only(right: 5),
+                  child: pw.Container(
+                    width: 15,
+                    height: 8 + (bars[i].abs() / scale * 30),
+                    color: i == 1
+                        ? PdfColor.fromHex('#009DFF')
+                        : PdfColor.fromHex('#8DBDFF'),
+                  ),
+                ),
+            ],
+          ),
+          pw.SizedBox(width: 10),
+          pw.Expanded(
+            child: pw.Text(valueText, style: const pw.TextStyle(fontSize: 8)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _driveTimelineChart(ObdScanRecord record) {
+    final frames = record.processedScan.driveTimeline;
+    final metric = ObdMetricCatalog.driveMetrics.firstWhere(
+      (key) => frames.any((frame) => frame.values.containsKey(key)),
+      orElse: () => frames.first.values.keys.first,
+    );
+    final values = frames
+        .map((frame) => frame.values[metric])
+        .whereType<double>()
+        .toList();
+    if (values.isEmpty) return pw.SizedBox();
+    final minValue = values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final range = maxValue - minValue;
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          '${ObdMetricCatalog.labels[metric] ?? metric} drive timeline',
+          style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+        ),
+        pw.SizedBox(height: 8),
+        pw.Container(
+          width: double.infinity,
+          height: 62,
+          padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: pw.BoxDecoration(
+            color: PdfColor.fromHex('#EFF7FF'),
+            borderRadius: pw.BorderRadius.circular(6),
+          ),
+          child: pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              for (final value in values)
+                pw.Expanded(
+                  child: pw.Container(
+                    height:
+                        8 + (range == 0 ? 1 : (value - minValue) / range * 44),
+                    margin: const pw.EdgeInsets.symmetric(horizontal: 2),
+                    color: PdfColor.fromHex('#009DFF'),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        pw.SizedBox(height: 4),
+        pw.Text(
+          'Minimum ${minValue.toStringAsFixed(1)} · Maximum ${maxValue.toStringAsFixed(1)} · ${ObdMetricCatalog.units[metric] ?? ''}',
+          style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+        ),
+      ],
     );
   }
 

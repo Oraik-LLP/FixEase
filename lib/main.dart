@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'config/app_config.dart';
+import 'screens/changelog_screen.dart';
+import 'screens/privacy_permissions_screen.dart';
 import 'models/ai_response.dart';
 import 'models/diagnostic.dart';
 import 'models/vehicle.dart';
@@ -52,7 +56,7 @@ void main() async {
     await ObdProService.instance.load();
   } catch (_) {}
   try {
-    await QuotaService.instance.refreshStatus();
+    unawaited(QuotaService.instance.refreshStatus());
   } catch (_) {}
   try {
     await ReminderSchedulerService.instance.initialize(
@@ -857,22 +861,38 @@ class _VehicleHero extends StatelessWidget {
         Positioned.fill(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(22),
-            child: Image.network(
-              CarImageService.imageUrl(
-                make: vehicle.make,
-                model: vehicle.model,
-                year: vehicle.year,
-              ),
-              fit: BoxFit.cover,
-              alignment: const Alignment(0.0, 0.1),
-              errorBuilder: (_, __, ___) => Image.asset(
-                CarImageService.defaultAsset,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Container(
-                  color: AppColors.surface,
-                ),
-              ),
-            ),
+            child: ![
+                      VehicleCategory.car,
+                      VehicleCategory.suv,
+                      VehicleCategory.pickup,
+                      VehicleCategory.van
+                    ].contains(vehicle.category) ||
+                    vehicle.make.isEmpty ||
+                    vehicle.model.isEmpty
+                ? Center(
+                    child: Icon(
+                        vehicle.category == VehicleCategory.motorcycle ||
+                                vehicle.category == VehicleCategory.scooter
+                            ? Icons.two_wheeler
+                            : Icons.local_shipping_outlined,
+                        size: 100,
+                        color: AppColors.textTertiary))
+                : Image.network(
+                    CarImageService.imageUrl(
+                      make: vehicle.make,
+                      model: vehicle.model,
+                      year: vehicle.year,
+                    ),
+                    fit: BoxFit.cover,
+                    alignment: const Alignment(0.0, 0.1),
+                    errorBuilder: (_, __, ___) => Image.asset(
+                      CarImageService.defaultAsset,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: AppColors.surface,
+                      ),
+                    ),
+                  ),
           ),
         ),
         // gradient overlay for text readability
@@ -937,7 +957,7 @@ class _VehicleHero extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                '${vehicle.year} · ${vehicle.fuelLabel} · ${vehicle.mileageKm} km',
+                vehicle.detailsLabel,
                 style: tt.bodySmall,
               ),
             ],
@@ -1080,7 +1100,8 @@ class DiagnoseTabBody extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('Choose Diagnostic Mode', style: tt.headlineMedium),
+              Expanded(
+                  child: Text('Start diagnosis', style: tt.headlineMedium)),
               const Spacer(),
               ListenableBuilder(
                 listenable: Listenable.merge([
@@ -1116,7 +1137,7 @@ class DiagnoseTabBody extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Select how you\'d like to diagnose your vehicle.',
+            'Choose the information you have. Technical details stay inside each tool.',
             style: tt.bodyMedium,
           ),
           const SizedBox(height: 6),
@@ -1125,7 +1146,7 @@ class DiagnoseTabBody extends StatelessWidget {
 
           _DiagnoseOptionCard(
             icon: Icons.warning_amber_rounded,
-            title: 'Urgent On-the-Spot',
+            title: 'Describe a problem',
             description:
                 'Answer quick questions about symptoms you\'re experiencing '
                 'right now for an immediate AI analysis.',
@@ -1136,7 +1157,7 @@ class DiagnoseTabBody extends StatelessWidget {
 
           _DiagnoseOptionCard(
             icon: Icons.camera_alt_rounded,
-            title: 'Photo-Based',
+            title: 'Show a visible issue',
             description:
                 'Upload or take photos of the issue — our AI analyzes visible '
                 'damage, fluid leaks, tire wear, and more.',
@@ -1148,9 +1169,10 @@ class DiagnoseTabBody extends StatelessWidget {
           // Gemini Live
           _DiagnoseOptionCard(
             icon: Icons.videocam_rounded,
-            title: 'Gemini Live',
-            description: 'Real-time AI diagnosis via your camera. '
-                'Point, capture, and chat with Gemini about what it sees.',
+            title: 'Talk through the problem',
+            description:
+                'Send a voice, text or photo turn and get guided follow-up help. '
+                'Selected media is sent for AI processing.',
             accentColor: const Color(0xFF4CAF50),
             badge: 'BETA',
             onTap: () => launchLiveDiagnosis(context),
@@ -1158,7 +1180,7 @@ class DiagnoseTabBody extends StatelessWidget {
           const SizedBox(height: 14),
           _DiagnoseOptionCard(
             icon: Icons.sensors_rounded,
-            title: 'OBD Pro Diagnostic Suite',
+            title: 'Use a scanner (OBD Pro)',
             description:
                 'Connect a Bluetooth ELM327 adapter for live vitals, a one-time '
                 'ECU snapshot, and premium idle and drive scans.',
@@ -1387,7 +1409,7 @@ class _ReportListCard extends StatelessWidget {
                     ? Icons.air_rounded
                     : isObdDrive
                         ? Icons.route_rounded
-                : Icons.camera_alt_outlined;
+                        : Icons.camera_alt_outlined;
     final iconColor = isUrgent
         ? const Color(0xFFFF9800)
         : isInvoiceAudit
@@ -1398,7 +1420,7 @@ class _ReportListCard extends StatelessWidget {
                     ? const Color(0xFF5DD6B2)
                     : isObdDrive
                         ? const Color(0xFF7EE787)
-                : AppColors.accent;
+                        : AppColors.accent;
     final title = isUrgent
         ? 'Urgent Diagnosis'
         : isInvoiceAudit
@@ -1409,7 +1431,7 @@ class _ReportListCard extends StatelessWidget {
                     ? 'OBD Idle Scan'
                     : isObdDrive
                         ? 'OBD Drive Scan'
-                : 'Photo Diagnosis';
+                        : 'Photo Diagnosis';
     final isLocked = DiagnosticService.instance.isOlderThanMostRecentSessions(
           session,
           allowedCount: 2,
@@ -1738,7 +1760,8 @@ class ProfileTabBody extends StatelessWidget {
               subtitle: 'Restore the free 3-diagnosis allowance',
               onTap: () async {
                 try {
-                  await SubscriptionService.instance.resetFreeCreditsForTesting();
+                  await SubscriptionService.instance
+                      .resetFreeCreditsForTesting();
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -1767,9 +1790,23 @@ class ProfileTabBody extends StatelessWidget {
             },
           ),
           _ProfileMenuItem(
+            icon: Icons.new_releases_outlined,
+            label: 'What’s new',
+            subtitle: 'Release notes and improvements',
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const ChangelogScreen())),
+          ),
+          _ProfileMenuItem(
+            icon: Icons.privacy_tip_outlined,
+            label: 'Privacy & permissions',
+            subtitle: 'Photos, voice, Bluetooth and purchases',
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const PrivacyPermissionsScreen())),
+          ),
+          _ProfileMenuItem(
             icon: Icons.info_outline_rounded,
             label: 'About FixEase',
-            subtitle: 'v1.0.0',
+            subtitle: 'v${AppConfig.buildName} (${AppConfig.buildNumber})',
             onTap: () {
               _openAbout();
             },

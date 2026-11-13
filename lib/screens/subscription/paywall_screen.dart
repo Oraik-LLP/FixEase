@@ -92,6 +92,11 @@ class _PaywallScreenState extends State<PaywallScreen> {
                           ],
                           const SizedBox(height: 22),
                           Text('Choose your access', style: tt.titleLarge),
+                          if (service.lastSyncErrorMessage != null) ...[
+                            const SizedBox(height: 10),
+                            Text(service.lastSyncErrorMessage!,
+                                style: tt.bodyMedium),
+                          ],
                           const SizedBox(height: 10),
                           _PlanCard(
                             product: emergency,
@@ -196,8 +201,9 @@ class _PaywallScreenState extends State<PaywallScreen> {
     if (!mounted) return;
     if (!success) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Purchase could not be completed.'),
+        SnackBar(
+          content: Text(SubscriptionService.instance.lastSyncErrorMessage ??
+              'Purchase could not be completed. No new access was granted.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -213,11 +219,14 @@ class _PaywallScreenState extends State<PaywallScreen> {
   }
 
   Future<void> _handleRestore() async {
-    await SubscriptionService.instance.restorePurchases();
+    final restored = await SubscriptionService.instance.restorePurchases();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Purchases restored'),
+      SnackBar(
+        content: Text(restored
+            ? 'Purchases restored'
+            : SubscriptionService.instance.lastSyncErrorMessage ??
+                'No active paid purchases were found.'),
         behavior: SnackBarBehavior.floating,
       ),
     );

@@ -9,10 +9,12 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/ai_response.dart';
 import '../models/diagnostic.dart';
 import '../models/obd.dart';
+import '../models/vehicle.dart';
 import 'ai_service.dart';
 import 'diagnostic_service.dart';
 import 'local_store_service.dart';
 import 'obd_processing_service.dart';
+import 'obd_error_mapper.dart';
 import 'obd_protocol.dart';
 import 'vehicle_service.dart';
 
@@ -38,9 +40,15 @@ class ObdPromptContext {
         'is_partial': insight.isPartial,
         'captured_duration_seconds': insight.capturedDurationSeconds,
         'target_duration_seconds': insight.targetDurationSeconds,
-        'static_snapshot': insight.record.staticSnapshot.toJson(),
+        'static_snapshot': _snapshotWithoutVin(
+          insight.record.staticSnapshot,
+        ),
         'processed_scan': insight.record.processedScan.toJson(),
       };
+
+  Map<String, dynamic> _snapshotWithoutVin(ObdStaticSnapshot snapshot) {
+    return Map<String, dynamic>.from(snapshot.toJson())..remove('vin');
+  }
 }
 
 class ObdScanOutcome {
@@ -103,6 +111,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
   ObdSuiteState _state = ObdSuiteState.disconnected;
   String _status = 'OBD Pro idle.';
   String? _errorMessage;
+  String? _errorCode;
+  String? _errorRecovery;
   ObdStaticSnapshot _staticSnapshot = const ObdStaticSnapshot();
   ObdLiveVitals _liveVitals = const ObdLiveVitals();
   bool _initCompleted = false;
@@ -120,6 +130,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
   bool _wakelockEnabled = false;
 
   final Map<String, Map<ObdScanKind, ObdInsightRecord>> _latestInsights = {};
+  final Map<String, ObdStaticSnapshot> _snapshotsByVehicle = {};
   final Map<String, bool> _promptInjectionPrefs = {};
   ObdScanOutcome? _lastOutcome;
 
@@ -133,7 +144,21 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
   ObdSuiteState get state => _state;
   String get status => _status;
   String? get errorMessage => _errorMessage;
+  String? get errorCode => _errorCode;
+  String? get errorRecovery => _errorRecovery;
   ObdStaticSnapshot get staticSnapshot => _staticSnapshot;
+  ObdStaticSnapshot staticSnapshotForVehicle(String vehicleId) {
+    final snapshot =
+        _snapshotsByVehicle[vehicleId] ?? const ObdStaticSnapshot();
+    if (snapshot.vin?.trim().isNotEmpty == true) return snapshot;
+    for (final vehicle in VehicleService.instance.vehicles) {
+      if (vehicle.id == vehicleId && vehicle.vin?.trim().isNotEmpty == true) {
+        return snapshot.copyWith(vin: vehicle.vin!.trim().toUpperCase());
+      }
+    }
+    return snapshot;
+  }
+
   ObdLiveVitals get liveVitals => _liveVitals;
   bool get initCompleted => _initCompleted;
   ObdScanKind? get activeScanKind => _activeScanKind;
@@ -196,6 +221,25 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
         }),
       );
 
+    final snapshotsJson = json['static_snapshots'];
+    _snapshotsByVehicle.clear();
+    if (snapshotsJson is Map) {
+      for (final entry in snapshotsJson.entries) {
+        if (entry.value is Map) {
+          try {
+            _snapshotsByVehicle[entry.key.toString()] =
+                ObdStaticSnapshot.fromJson(
+              Map<String, dynamic>.from(entry.value as Map),
+            );
+          } catch (_) {}
+        }
+      }
+    }
+    final selectedVehicle = VehicleService.instance.selected;
+    if (selectedVehicle != null) {
+      _staticSnapshot = staticSnapshotForVehicle(selectedVehicle.id);
+    }
+
     final prefsJson =
         json['prompt_injection_prefs'] as Map<String, dynamic>? ?? const {};
     _promptInjectionPrefs
@@ -221,18 +265,18 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
 
     try {
-      final granted = await FlutterBluetoothSerial.ensurePermissions();
+      final granted = await FlutterBluetoothSerial.ensurePermissions()
+          .timeout(const Duration(seconds: 20));
       if (!granted) {
         _permissionsReady = false;
-        _status = 'Bluetooth permissions denied.';
+        _setBluetoothError(StateError('Bluetooth permission denied'));
         return;
       }
 
       _permissionsReady = true;
       await refreshDevices();
     } catch (error) {
-      _status = 'Bluetooth setup failed: $error';
-      _errorMessage = _status;
+      _setBluetoothError(error);
     } finally {
       _isLoadingDevices = false;
       notifyListeners();
@@ -248,8 +292,16 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
 
     try {
-      final paired = await FlutterBluetoothSerial.getPairedDevices();
-      final scanned = await FlutterBluetoothSerial.scanDevices();
+      final paired = await FlutterBluetoothSerial.getPairedDevices()
+          .timeout(const Duration(seconds: 8));
+      var scanned = <Map<String, String>>[];
+      try {
+        scanned = await FlutterBluetoothSerial.scanDevices()
+            .timeout(const Duration(seconds: 12));
+      } catch (_) {
+        if (paired.isEmpty) rethrow;
+        // Paired adapters remain usable when discovery fails or times out.
+      }
       final pairedTargets = paired.map(BluetoothTarget.fromMap).toList();
       final scannedTargets = scanned.map(BluetoothTarget.fromMap).toList();
       final merged = <String, BluetoothTarget>{
@@ -260,14 +312,14 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       _pairedDevices = pairedTargets;
       _scanDevices = merged.values.toList()
         ..sort((a, b) => a.displayName.compareTo(b.displayName));
-      _selectedDevice ??=
-          _pairedDevices.isNotEmpty ? _pairedDevices.first : _scanDevices.firstOrNull;
+      _selectedDevice ??= _pairedDevices.isNotEmpty
+          ? _pairedDevices.first
+          : _scanDevices.firstOrNull;
       _status = _selectedDevice == null
           ? 'No paired OBD adapters found yet.'
           : 'Adapter list ready.';
     } catch (error) {
-      _errorMessage = 'Device discovery failed: $error';
-      _status = _errorMessage!;
+      _setBluetoothError(error);
     } finally {
       _isLoadingDevices = false;
       notifyListeners();
@@ -287,6 +339,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
 
     _isConnecting = true;
     _errorMessage = null;
+    _errorCode = null;
+    _errorRecovery = null;
     _status = 'Connecting to ${device.displayName}...';
     _state = ObdSuiteState.connecting;
     notifyListeners();
@@ -295,8 +349,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       await disconnect(clearStatus: false);
       final connected = await FlutterBluetoothSerial.connect(
         device.address,
-        timeoutMs: 1500,
-      );
+        timeoutMs: 10000,
+      ).timeout(const Duration(seconds: 12));
       if (!connected) {
         throw Exception('The adapter did not accept the connection.');
       }
@@ -306,7 +360,10 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       _keepReading = true;
       _readLoopFuture = _readLoop();
       _status = 'Connected to ${device.displayName}.';
-      _staticSnapshot = const ObdStaticSnapshot();
+      final vehicleId = VehicleService.instance.selected?.id;
+      _staticSnapshot = vehicleId == null
+          ? const ObdStaticSnapshot()
+          : staticSnapshotForVehicle(vehicleId);
       _liveVitals = const ObdLiveVitals();
       _initCompleted = false;
       notifyListeners();
@@ -318,8 +375,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
         _startLiveLoop();
       }
     } catch (error) {
-      _errorMessage = 'Connection failed: $error';
-      _status = _errorMessage!;
+      _setBluetoothError(error);
       _state = ObdSuiteState.error;
       _isConnected = false;
     } finally {
@@ -340,7 +396,7 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     _stopScanTicker();
 
     try {
-      await FlutterBluetoothSerial.disconnect();
+      await FlutterBluetoothSerial.disconnect().timeout(const Duration(seconds: 4));
       await _readLoopFuture.timeout(
         const Duration(milliseconds: 300),
         onTimeout: () async {},
@@ -545,6 +601,11 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
         );
         break;
     }
+    final vehicleId = VehicleService.instance.selected?.id;
+    if (vehicleId != null) {
+      _snapshotsByVehicle[vehicleId] = _staticSnapshot;
+      unawaited(_persist());
+    }
     notifyListeners();
   }
 
@@ -653,7 +714,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     if (metricKey == null) {
       return;
     }
-    final metricValue = response.numericValue ?? response.integerValue?.toDouble();
+    final metricValue =
+        response.numericValue ?? response.integerValue?.toDouble();
     if (metricValue == null) {
       return;
     }
@@ -720,13 +782,62 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       processedScan: processed,
     );
 
+    final sessionId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final createdAt = DateTime.now();
+    final offlineSession = DiagnosticSession(
+      id: sessionId,
+      vehicleId: vehicle.id,
+      type: kind == ObdScanKind.idle
+          ? DiagnosticType.obdIdle
+          : DiagnosticType.obdDrive,
+      description: isPartial
+          ? 'Partial ${kind.name} OBD scan'
+          : '${kind.name[0].toUpperCase()}${kind.name.substring(1)} OBD scan',
+      contextJson: {
+        'obd_record': record.toJson(),
+        'analysis_status': 'pending',
+      },
+      vehicleName: vehicle.displayName,
+      createdAt: createdAt,
+    );
+
+    try {
+      await DiagnosticService.instance.save(offlineSession);
+    } catch (_) {
+      _errorMessage =
+          'The scan finished, but FixEase could not save it on this device.';
+      _errorCode = 'local_report_save_failed';
+      _status =
+          'Report could not be saved. Check device storage and try again.';
+      _state = ObdSuiteState.error;
+      await _disableWakelock();
+      notifyListeners();
+      return;
+    }
+
+    _status = 'Scan saved on this device. Preparing AI analysis...';
+    notifyListeners();
+
+    if (samples.isEmpty) {
+      await _completeOfflineReport(
+        vehicle: vehicle,
+        kind: kind,
+        sessionId: sessionId,
+        record: record,
+        createdAt: createdAt,
+        status:
+            'No OBD data was received. An empty scan log was saved offline.',
+      );
+      return;
+    }
+
     try {
       final aiResponse = await AiService.instance.analyzeObdPro(
         vehicle: vehicle,
         record: record,
       );
       final session = DiagnosticSession(
-        id: DateTime.now().microsecondsSinceEpoch.toRadixString(36),
+        id: sessionId,
         vehicleId: vehicle.id,
         type: kind == ObdScanKind.idle
             ? DiagnosticType.obdIdle
@@ -738,9 +849,11 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
         aiResponseJson: aiResponse.toJson(),
         contextJson: {
           'obd_record': record.toJson(),
+          'analysis_status': 'complete',
         },
         healthScore: aiResponse.healthScore,
         vehicleName: vehicle.displayName,
+        createdAt: createdAt,
       );
       await DiagnosticService.instance.save(session);
       final insight = ObdInsightRecord(
@@ -752,8 +865,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
         record: record,
         createdAt: DateTime.now(),
       );
-      (_latestInsights[vehicle.id] ??= <ObdScanKind, ObdInsightRecord>{})[kind] =
-          insight;
+      (_latestInsights[vehicle.id] ??=
+          <ObdScanKind, ObdInsightRecord>{})[kind] = insight;
       _lastOutcome = ObdScanOutcome(
         session: session,
         record: record,
@@ -763,12 +876,16 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       _status = isPartial
           ? 'Saved partial ${kind.name} scan.'
           : '${kind == ObdScanKind.idle ? 'Idle' : 'Drive'} scan complete.';
-    } catch (error) {
-      _errorMessage = 'Could not analyze the ${kind.name} scan: $error';
-      _status = _errorMessage!;
-      _state = ObdSuiteState.error;
-      _disableWakelock();
-      notifyListeners();
+    } catch (_) {
+      await _completeOfflineReport(
+        vehicle: vehicle,
+        kind: kind,
+        sessionId: sessionId,
+        record: record,
+        createdAt: createdAt,
+        status:
+            'Scan saved offline. AI analysis could not finish; retry when online.',
+      );
       return;
     }
 
@@ -777,6 +894,44 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     _scanSamples.clear();
     _driveAboveThresholdCount = 0;
     _disableWakelock();
+    if (_isConnected) {
+      _state = ObdSuiteState.liveReady;
+      _startLiveLoop();
+    } else {
+      _state = ObdSuiteState.interrupted;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _completeOfflineReport({
+    required Vehicle vehicle,
+    required ObdScanKind kind,
+    required String sessionId,
+    required ObdScanRecord record,
+    required DateTime createdAt,
+    required String status,
+  }) async {
+    final offlineInsight = ObdInsightRecord(
+      vehicleId: vehicle.id,
+      kind: kind,
+      sessionId: sessionId,
+      summary: status,
+      aiResponseJson: const <String, dynamic>{},
+      record: record,
+      createdAt: createdAt,
+    );
+    (_latestInsights[vehicle.id] ??= <ObdScanKind, ObdInsightRecord>{})[kind] =
+        offlineInsight;
+    await _persist();
+    _status = status;
+    _errorMessage = null;
+    _errorCode = null;
+    _activeScanKind = null;
+    _scanStartedAt = null;
+    _scanSamples.clear();
+    _driveAboveThresholdCount = 0;
+    _stopScanTicker();
+    await _disableWakelock();
     if (_isConnected) {
       _state = ObdSuiteState.liveReady;
       _startLiveLoop();
@@ -796,7 +951,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     }
     final captured = _capturedDuration;
     final canFinalizePartial = switch (kind) {
-      ObdScanKind.idle => ObdPartialRecoveryPolicy.canFinalizeIdlePartial(captured),
+      ObdScanKind.idle =>
+        ObdPartialRecoveryPolicy.canFinalizeIdlePartial(captured),
       ObdScanKind.drive => ObdPartialRecoveryPolicy.canFinalizeDrivePartial(
           isArmed: _state == ObdSuiteState.driveRunning,
           capturedDuration: captured,
@@ -821,10 +977,13 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    _discardInterruptedScan(
-      kind == ObdScanKind.drive
-          ? 'Drive scan interrupted before enough data was captured.'
-          : 'Idle scan interrupted before enough data was captured.',
+    await _finalizeScan(
+      kind: kind,
+      isPartial: true,
+      reason: reason,
+      announceDriveCompletion: disconnected &&
+          kind == ObdScanKind.drive &&
+          _state == ObdSuiteState.driveRunning,
     );
   }
 
@@ -983,9 +1142,8 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _runLiveLoop() async {
     var index = 0;
-    while (_liveLoopEnabled &&
-        _isConnected &&
-        _state == ObdSuiteState.liveReady) {
+    while (
+        _liveLoopEnabled && _isConnected && _state == ObdSuiteState.liveReady) {
       final command = ObdProtocol.liveCommands[index];
       await _sendCommand(command);
       index = (index + 1) % ObdProtocol.liveCommands.length;
@@ -1013,9 +1171,16 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _disableWakelock();
     _state = ObdSuiteState.interrupted;
-    _status = 'Bluetooth connection dropped. Reconnect to continue.';
-    _errorMessage = error;
+    _setBluetoothError(StateError(error));
     notifyListeners();
+  }
+
+  void _setBluetoothError(Object error) {
+    final info = ObdErrorMapper.from(error);
+    _errorCode = info.code;
+    _errorMessage = info.message;
+    _errorRecovery = info.nextStep;
+    _status = info.message;
   }
 
   Future<void> _persist() {
@@ -1029,6 +1194,9 @@ class ObdProService extends ChangeNotifier with WidgetsBindingObserver {
               (kind, insight) => MapEntry(kind.name, insight.toJson()),
             ),
           ),
+        ),
+        'static_snapshots': _snapshotsByVehicle.map(
+          (vehicleId, snapshot) => MapEntry(vehicleId, snapshot.toJson()),
         ),
         'prompt_injection_prefs': _promptInjectionPrefs,
       },

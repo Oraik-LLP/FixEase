@@ -60,12 +60,26 @@ class ObdProDashboardScreen extends StatefulWidget {
 }
 
 class _ObdProDashboardScreenState extends State<ObdProDashboardScreen> {
+  final GlobalKey _scanControlsKey = GlobalKey();
+  bool _wasScanActive = false;
+
+  void _scrollToActiveScan() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final scanContext = _scanControlsKey.currentContext;
+      if (scanContext == null) return;
+      Scrollable.ensureVisible(
+        scanContext,
+        alignment: 0.08,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ObdProService.instance.ensurePermissionsAndLoadDevices();
-    });
   }
 
   @override
@@ -80,12 +94,21 @@ class _ObdProDashboardScreenState extends State<ObdProDashboardScreen> {
             listenable: ObdProService.instance,
             builder: (context, _) {
               final service = ObdProService.instance;
+              final scanIsActive = service.isScanActive;
+              if (scanIsActive && !_wasScanActive) {
+                _wasScanActive = true;
+                _scrollToActiveScan();
+              } else if (!scanIsActive) {
+                _wasScanActive = false;
+              }
               final idleInsight = vehicle == null
                   ? null
-                  : service.latestInsightForVehicle(vehicle.id, ObdScanKind.idle);
+                  : service.latestInsightForVehicle(
+                      vehicle.id, ObdScanKind.idle);
               final driveInsight = vehicle == null
                   ? null
-                  : service.latestInsightForVehicle(vehicle.id, ObdScanKind.drive);
+                  : service.latestInsightForVehicle(
+                      vehicle.id, ObdScanKind.drive);
 
               return Column(
                 children: [
@@ -135,19 +158,31 @@ class _ObdProDashboardScreenState extends State<ObdProDashboardScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Keep the app open during active scans. Screen auto-lock is prevented while a scan is running.',
+                            'Choose Find adapters to request Bluetooth access. Older Android versions may also request location permission for discovery. Use only a correctly rated adapter/cable for this vehicle. Keep the app open during scans.',
                             style: tt.bodySmall,
                           ),
                           const SizedBox(height: 18),
+                          Text(
+                            'Compatibility: untested until this exact vehicle, market, adapter and protocol have been validated. Bikes, scooters and heavy-duty vehicles may require different connectors or protocols. Symptom/photo assistance remains available.',
+                            style: tt.bodySmall,
+                          ),
+                          const SizedBox(height: 12),
                           _ConnectionCard(service: service),
                           const SizedBox(height: 14),
                           _StatusBanner(service: service),
                           const SizedBox(height: 14),
                           _LiveVitalsSection(service: service),
                           const SizedBox(height: 14),
-                          _StaticSnapshotCard(snapshot: service.staticSnapshot),
+                          _StaticSnapshotCard(
+                            snapshot: service.staticSnapshotForVehicle(
+                              vehicle?.id ?? '',
+                            ),
+                          ),
                           const SizedBox(height: 14),
-                          _ScanControlsCard(service: service),
+                          KeyedSubtree(
+                            key: _scanControlsKey,
+                            child: _ScanControlsCard(service: service),
+                          ),
                           const SizedBox(height: 14),
                           _LatestInsightSection(
                             title: 'Latest Idle Diagnosis',
@@ -196,10 +231,22 @@ class _ConnectionCard extends StatelessWidget {
               const Spacer(),
               NeuIconButton(
                 icon: Icons.refresh_rounded,
-                onPressed: service.refreshDevices,
+                onPressed: () {
+                  if (!service.isLoadingDevices) {
+                    service.ensurePermissionsAndLoadDevices();
+                  }
+                },
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          NeuSecondaryButton(
+              label: service.isLoadingDevices
+                  ? 'Finding adapters…'
+                  : 'Find adapters',
+              onPressed: service.isLoadingDevices
+                  ? null
+                  : service.ensurePermissionsAndLoadDevices),
           const SizedBox(height: 12),
           if (devices.isEmpty)
             Text(
@@ -220,8 +267,9 @@ class _ConnectionCard extends StatelessWidget {
               value: service.selectedDevice?.address,
               hint: 'Select your adapter',
               onChanged: (value) {
-                final next =
-                    devices.where((device) => device.address == value).firstOrNull;
+                final next = devices
+                    .where((device) => device.address == value)
+                    .firstOrNull;
                 service.selectDevice(next);
               },
               items: devices
@@ -241,7 +289,9 @@ class _ConnectionCard extends StatelessWidget {
                 child: NeuPrimaryButton(
                   label: service.isConnected ? 'Reconnect' : 'Connect',
                   icon: Icons.bluetooth_connected_rounded,
-                  onPressed: service.isLoadingDevices ? null : service.connect,
+                  onPressed: service.isLoadingDevices || service.isConnecting
+                      ? null
+                      : service.connect,
                 ),
               ),
               const SizedBox(width: 10),
@@ -301,7 +351,23 @@ class _StatusBanner extends StatelessWidget {
             service.status,
             style: tt.bodyMedium?.copyWith(color: AppColors.textPrimary),
           ),
-          if (service.isScanActive || service.state == ObdSuiteState.interrupted) ...[
+          if (service.errorCode != null) ...[
+            const SizedBox(height: 7),
+            Text(
+              service.errorCode!,
+              style: tt.bodySmall?.copyWith(
+                color: color,
+                fontFamily: 'monospace',
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              service.errorRecovery ?? '',
+              style: tt.bodySmall?.copyWith(color: AppColors.textSecondary),
+            ),
+          ],
+          if (service.isScanActive ||
+              service.state == ObdSuiteState.interrupted) ...[
             const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
@@ -522,8 +588,7 @@ class _ScanControlsCard extends StatelessWidget {
                 child: Text('Smart Recording', style: tt.titleLarge),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),
                   color: const Color(0xFFFFB366).withValues(alpha: 0.16),

@@ -5,6 +5,17 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val uploadStoreFile = System.getenv("FIXEASE_UPLOAD_STORE_FILE")
+val uploadStorePassword = System.getenv("FIXEASE_UPLOAD_STORE_PASSWORD")
+val uploadKeyAlias = System.getenv("FIXEASE_UPLOAD_KEY_ALIAS")
+val uploadKeyPassword = System.getenv("FIXEASE_UPLOAD_KEY_PASSWORD")
+val hasUploadSigning = listOf(
+    uploadStoreFile,
+    uploadStorePassword,
+    uploadKeyAlias,
+    uploadKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.oraik.fixease"
     compileSdk = flutter.compileSdkVersion
@@ -30,9 +41,22 @@ android {
         versionName = flutter.versionName
     }
 
+    if (hasUploadSigning) {
+        signingConfigs.create("release") {
+            storeFile = file(uploadStoreFile!!)
+            storePassword = uploadStorePassword!!
+            keyAlias = uploadKeyAlias!!
+            keyPassword = uploadKeyPassword!!
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            // Use the existing Play upload key from the local environment. A
+            // release is intentionally left unsigned when credentials are absent.
+            if (hasUploadSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }

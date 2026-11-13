@@ -1,6 +1,16 @@
 /// Global app configuration for monetization, legal links, and support.
 abstract final class AppConfig {
-  static const bool isDemoMode = true;
+  static const buildName =
+      String.fromEnvironment('FIXEASE_BUILD_NAME', defaultValue: '1.1.0');
+  static const buildNumber =
+      String.fromEnvironment('FIXEASE_BUILD_NUMBER', defaultValue: '17');
+  static const releaseChannel = String.fromEnvironment(
+      'FIXEASE_RELEASE_CHANNEL',
+      defaultValue: 'production');
+  static const bool isDemoMode = bool.fromEnvironment(
+    'FIXEASE_DEMO_MODE',
+    defaultValue: true,
+  );
 
   static const supportEmail = 'support@oraik.co';
   static const termsUrl = 'https://oraik.co/terms';

@@ -1,7 +1,7 @@
 name: fixease
 description: FixEase car diagnostic app
 publish_to: "none"
-version: 1.0.0+8
+version: 1.1.0+17
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -30,29 +30,39 @@ dependencies:
   workmanager: ^0.9.0+3
   timezone: ^0.11.0
   flutter_timezone: ^5.0.2
-  purchases_flutter: ^8.10.1
+  purchases_flutter: 11.0.0
   flutter_image_compress: ^2.4.0
   in_app_review: ^2.0.10
   url_launcher: ^6.3.1
   ntp: ^2.0.0
   bluetooth_serial_android: ^1.1.2
   wakelock_plus: ^1.2.8
+  # Flutter registers this Android plugin at runtime, so it must be a regular
+  # dependency even though its CLI is only used when regenerating splash art.
+  flutter_native_splash: ^2.4.6
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-  flutter_native_splash: ^2.4.6
 
 flutter:
   uses-material-design: true
   assets:
     - assets/logo/
+    - assets/release_history.json
 
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
-  image_path: "assets/logo/fixease_logo.png"
+  image_path: "assets/logo/fixease_icon_approved.png"
   min_sdk_android: 21
   adaptive_icon_background: "#111114"
-  adaptive_icon_foreground: "assets/logo/fixease_logo.png"
+  adaptive_icon_foreground: "assets/logo/fixease_icon_foreground_transparent.png"
+
+flutter_native_splash:
+  color: "#111114"
+  image: assets/logo/fixease_icon_approved.png
+  android_12:
+    color: "#111114"
+    image: assets/logo/fixease_icon_approved.png

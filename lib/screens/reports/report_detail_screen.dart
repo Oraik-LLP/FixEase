@@ -34,6 +34,8 @@ class _UnavailableReportCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
+    final rawObdSaved =
+        session.isObd && session.contextJson?['obd_record'] is Map;
 
     return NeuPane(
       child: Column(
@@ -44,10 +46,17 @@ class _UnavailableReportCard extends StatelessWidget {
             color: AppColors.textTertiary,
           ),
           const SizedBox(height: 12),
-          Text('Diagnosis temporarily unavailable', style: tt.bodyMedium),
+          Text(
+            rawObdSaved
+                ? 'Scan saved on this device'
+                : 'Diagnosis temporarily unavailable',
+            style: tt.bodyMedium,
+          ),
           const SizedBox(height: 4),
           Text(
-            'We could not complete the AI report because of a backend or connection issue. Please try again in a little while.',
+            rawObdSaved
+                ? 'AI analysis could not finish, but the raw scan and local summaries are saved below. You can share the technician PDF from this report.'
+                : 'We could not complete the AI report because of a backend or connection issue. Please try again in a little while.',
             style: tt.bodySmall,
             textAlign: TextAlign.center,
           ),
@@ -81,10 +90,12 @@ String _obdCompletionLabel(ObdCompletionReason reason) => switch (reason) {
 String _obdMetricLabel(String metricKey) =>
     ObdMetricCatalog.labels[metricKey] ?? metricKey;
 
-String _obdMetricUnit(String metricKey) => ObdMetricCatalog.units[metricKey] ?? '';
+String _obdMetricUnit(String metricKey) =>
+    ObdMetricCatalog.units[metricKey] ?? '';
 
 String _formatObdValue(double value, String metricKey) {
-  final rounded = value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
+  final rounded =
+      value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
   final unit = _obdMetricUnit(metricKey);
   return unit.isEmpty ? rounded : '$rounded $unit';
 }
@@ -97,9 +108,13 @@ String _formatDurationChip(int seconds) {
 }
 
 class _ObdTelemetrySection extends StatelessWidget {
-  const _ObdTelemetrySection({required this.record});
+  const _ObdTelemetrySection({
+    required this.record,
+    required this.session,
+  });
 
   final ObdScanRecord record;
+  final DiagnosticSession session;
 
   @override
   Widget build(BuildContext context) {
@@ -110,9 +125,19 @@ class _ObdTelemetrySection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'OBD Scan Details',
-                style: Theme.of(context).textTheme.titleMedium,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'OBD Scan Details',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  RawObdReportExportButton(
+                    session: session,
+                    record: record,
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -149,7 +174,8 @@ class _ObdTelemetrySection extends StatelessWidget {
         if (record.kind == ObdScanKind.drive &&
             record.processedScan.timelineSummary.isNotEmpty) ...[
           const SizedBox(height: 16),
-          _ObdDriveSummarySection(summary: record.processedScan.timelineSummary),
+          _ObdDriveSummarySection(
+              summary: record.processedScan.timelineSummary),
         ],
         if (record.kind == ObdScanKind.drive &&
             record.processedScan.driveTimeline.isNotEmpty) ...[
@@ -211,11 +237,11 @@ class _ObdIdleStatsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final orderedKeys = ObdMetricCatalog.idleMetrics
-        .where(stats.containsKey)
-        .followedBy(
-          stats.keys.where((key) => !ObdMetricCatalog.idleMetrics.contains(key)),
-        );
+    final orderedKeys =
+        ObdMetricCatalog.idleMetrics.where(stats.containsKey).followedBy(
+              stats.keys
+                  .where((key) => !ObdMetricCatalog.idleMetrics.contains(key)),
+            );
 
     return NeuPane(
       child: Column(
@@ -244,11 +270,11 @@ class _ObdDriveSummarySection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    final orderedKeys = ObdMetricCatalog.driveMetrics
-        .where(summary.containsKey)
-        .followedBy(
-          summary.keys.where((key) => !ObdMetricCatalog.driveMetrics.contains(key)),
-        );
+    final orderedKeys =
+        ObdMetricCatalog.driveMetrics.where(summary.containsKey).followedBy(
+              summary.keys
+                  .where((key) => !ObdMetricCatalog.driveMetrics.contains(key)),
+            );
 
     return NeuPane(
       child: Column(
@@ -328,9 +354,12 @@ class _ObdMetricStatsTile extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _ObdInfoChip(label: 'Avg ${_formatObdValue(stats.average, metricKey)}'),
-              _ObdInfoChip(label: 'Min ${_formatObdValue(stats.minimum, metricKey)}'),
-              _ObdInfoChip(label: 'Max ${_formatObdValue(stats.maximum, metricKey)}'),
+              _ObdInfoChip(
+                  label: 'Avg ${_formatObdValue(stats.average, metricKey)}'),
+              _ObdInfoChip(
+                  label: 'Min ${_formatObdValue(stats.minimum, metricKey)}'),
+              _ObdInfoChip(
+                  label: 'Max ${_formatObdValue(stats.maximum, metricKey)}'),
               _ObdInfoChip(label: 'Samples ${stats.sampleCount}'),
               if (stats.droppedSampleCount > 0)
                 _ObdInfoChip(label: 'Dropped ${stats.droppedSampleCount}'),
@@ -494,9 +523,13 @@ class ReportDetailScreen extends StatelessWidget {
                           _UnavailableReportCard(session: session),
                         if (_obdRecord != null) ...[
                           const SizedBox(height: 16),
-                          _ObdTelemetrySection(record: _obdRecord!),
+                          _ObdTelemetrySection(
+                            record: _obdRecord!,
+                            session: session,
+                          ),
                         ],
-                      ] else if (resp != null && session.type == DiagnosticType.invoiceAudit) ...[
+                      ] else if (resp != null &&
+                          session.type == DiagnosticType.invoiceAudit) ...[
                         DiagnosticResultCard(
                           response: resp,
                           session: session,
@@ -542,7 +575,8 @@ class ReportDetailScreen extends StatelessWidget {
                                 ],
                               ),
                               const SizedBox(height: 10),
-                              AppMarkdownText(resp.summary, style: tt.bodyMedium),
+                              AppMarkdownText(resp.summary,
+                                  style: tt.bodyMedium),
                             ],
                           ),
                         ),
@@ -556,8 +590,7 @@ class ReportDetailScreen extends StatelessWidget {
 
                         // recommendations
                         if (resp.recommendations.isNotEmpty) ...[
-                          _RecommendationsSection(
-                              items: resp.recommendations),
+                          _RecommendationsSection(items: resp.recommendations),
                           const SizedBox(height: 16),
                         ],
                       ] else
@@ -591,10 +624,8 @@ class ReportDetailScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Text('Delete Report',
-            style: Theme.of(ctx).textTheme.titleLarge),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Delete Report', style: Theme.of(ctx).textTheme.titleLarge),
         content: Text(
           'This report will be permanently deleted.',
           style: Theme.of(ctx).textTheme.bodyMedium,
@@ -726,8 +757,7 @@ class _ReportHeader extends StatelessWidget {
             Text(session.timeLabel, style: tt.bodySmall),
             const SizedBox(width: 16),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(6),
                 color: accentColor.withValues(alpha: 0.12),
@@ -943,8 +973,7 @@ class _ScoreBar extends StatelessWidget {
         SizedBox(
           width: 100,
           child: Text(label,
-              style: tt.bodySmall
-                  ?.copyWith(fontWeight: FontWeight.w500)),
+              style: tt.bodySmall?.copyWith(fontWeight: FontWeight.w500)),
         ),
         Expanded(
           child: Stack(
@@ -1084,8 +1113,7 @@ class _RadarPainter extends CustomPainter {
     // axis lines
     for (var i = 0; i < n; i++) {
       final a = startAngle + i * angleStep;
-      final end =
-          Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
+      final end = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
       canvas.drawLine(c, end, gridPaint);
     }
 
@@ -1415,7 +1443,8 @@ class _LiveConversationSection extends StatelessWidget {
     return ListenableBuilder(
       listenable: ConversationService.instance,
       builder: (context, _) {
-        final thread = ConversationService.instance.threadForSession(session.id);
+        final thread =
+            ConversationService.instance.threadForSession(session.id);
         final messageCount = thread?.messages.length ?? 0;
 
         return NeuPane(
@@ -1480,7 +1509,8 @@ class _PastConversationsSection extends StatelessWidget {
     return ListenableBuilder(
       listenable: ConversationService.instance,
       builder: (context, _) {
-        final thread = ConversationService.instance.threadForSession(session.id);
+        final thread =
+            ConversationService.instance.threadForSession(session.id);
         final hasThread = thread != null && thread.messages.isNotEmpty;
 
         return NeuPane(
@@ -1622,7 +1652,8 @@ class _MetadataSection extends StatelessWidget {
           Text('Report Details', style: tt.titleSmall),
           const SizedBox(height: 8),
           _MetaRow('Report ID', session.id),
-          _MetaRow('Type',
+          _MetaRow(
+              'Type',
               switch (session.type) {
                 DiagnosticType.urgent => 'Urgent',
                 DiagnosticType.photo => 'Photo',
@@ -1635,10 +1666,10 @@ class _MetadataSection extends StatelessWidget {
             session.isObd
                 ? 'Scan Status'
                 : session.type == DiagnosticType.invoiceAudit
-                ? 'Assessment'
-                : session.type == DiagnosticType.live
-                    ? 'Session'
-                    : 'Severity',
+                    ? 'Assessment'
+                    : session.type == DiagnosticType.live
+                        ? 'Session'
+                        : 'Severity',
             session.isObd
                 ? (obdRecord == null
                     ? 'OBD telemetry'
@@ -1646,10 +1677,10 @@ class _MetadataSection extends StatelessWidget {
                         ? 'Partial - ${_obdCompletionLabel(obdRecord.completionReason)}'
                         : 'Complete - ${_obdCompletionLabel(obdRecord.completionReason)}')
                 : session.type == DiagnosticType.invoiceAudit
-                ? (session.aiResponseJson?['verdict'] as String? ?? 'Audit')
-                : session.type == DiagnosticType.live
-                    ? 'Conversation'
-                    : session.severityLabel,
+                    ? (session.aiResponseJson?['verdict'] as String? ?? 'Audit')
+                    : session.type == DiagnosticType.live
+                        ? 'Conversation'
+                        : session.severityLabel,
           ),
           _MetaRow('Date', '${session.dateLabel} ${session.timeLabel}'),
           if (session.isObd && obdRecord != null)
@@ -1681,8 +1712,7 @@ class _MetaRow extends StatelessWidget {
           SizedBox(
             width: 90,
             child: Text(label,
-                style: tt.bodySmall
-                    ?.copyWith(color: AppColors.textTertiary)),
+                style: tt.bodySmall?.copyWith(color: AppColors.textTertiary)),
           ),
           Expanded(
             child: Text(value, style: tt.bodySmall),

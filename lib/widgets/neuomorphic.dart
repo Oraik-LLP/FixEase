@@ -287,6 +287,8 @@ class NeuTextField extends StatelessWidget {
     this.minLines = 1,
     this.maxLines = 1,
     this.textInputAction,
+    this.inputFormatters,
+    this.textCapitalization = TextCapitalization.none,
   });
 
   final String? hint;
@@ -303,6 +305,8 @@ class NeuTextField extends StatelessWidget {
   final int? minLines;
   final int? maxLines;
   final TextInputAction? textInputAction;
+  final List<TextInputFormatter>? inputFormatters;
+  final TextCapitalization textCapitalization;
 
   @override
   Widget build(BuildContext context) {
@@ -315,6 +319,8 @@ class NeuTextField extends StatelessWidget {
       ),
       child: TextField(
         controller: controller,
+        inputFormatters: inputFormatters,
+        textCapitalization: textCapitalization,
         obscureText: obscure,
         keyboardType: keyboardType,
         minLines: minLines,
