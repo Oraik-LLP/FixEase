@@ -15,8 +15,8 @@ This status supersedes older planning claims about these items. Internal beta us
 ## P0 production status
 
 - A real online symptom diagnosis returned HTTP 200 and a structured diagnosis from the existing production AI backend. This was a synthetic release-validation case, not a real vehicle inspection.
-- Server purchase verification and vehicle recognition are tested and pushed to `Oraik-LLP/back_car` main, commit `8cff9f9`.
-- **Backend redeployment is pending at the owner's request while the hosting location is checked.** The live service still accepts a claimed Pro header without proof. Do not mark server purchase verification or production recognition complete. Host deployment instructions and a Dockerfile are in the backend repository.
+- Server purchase verification and vehicle recognition are tested and pushed to `Oraik-LLP/back_car` main, commit `8cff9f9`. Production now reports `release: 1.1.0-v17`, `purchase_verification: revenuecat-server-v1` and `vehicle_recognition: 1`.
+- **Production deployment observed and smoke-tested on November 13, 2026.** A Pro hint without a customer ID returns HTTP 401. A synthetic symptom diagnosis returns HTTP 200 from Gemini (`is_fallback: false`). Online recognition of the bundled stylized Cybertruck illustration returns HTTP 200, identifies Tesla/Cybertruck/pickup, and leaves year and fuel unknown. This is an illustration-based endpoint check, not real-world vehicle-recognition accuracy validation. The deployment dashboard is `https://deploy.oraik.co`, protected by Cloudflare Access. No dashboard configuration or credentials were changed during these checks.
 - Genuine Play license-tester purchase/restore/refund/pending-payment testing and airplane-mode checks on a phone remain necessary. The replacement upload key must be active in Play Console before Play accepts these signed bundles.
 - Anonymous RevenueCat IDs are not account authentication. Server verification removes a plan-header-only bypass; authenticated account binding/attestation remains future work. Modified APKs cannot be made completely unpatchable.
 
@@ -30,7 +30,7 @@ This status supersedes older planning claims about these items. Internal beta us
 
 ## Remaining feature backlog
 
-1. Deploy the backend and verify genuine paid/free requests and one/two-photo inference against production.
+1. Verify a genuine paid RevenueCat entitlement, expired/revoked purchases, and real one/two-photo vehicle recognition through the phone. Production deployment, a free symptom inference, one-image illustration recognition and rejection of a header-only Pro claim are now confirmed; these do not establish the genuine paid path or real-photo accuracy.
 2. Phone/internal-track purchase and Bluetooth regression testing, including Android 11 and an actual supported adapter/vehicle combination.
 3. Rev Sound / rev-matching entertainment feature: telemetry/audio prototype, licensed sounds, routing/volume/interruption handling and stale-telemetry stop behavior. Not implemented in this build.
 4. Verified bike/scooter and commercial-vehicle adapter/protocol coverage, a tested compatibility catalogue, category-specific reports and heavy-duty J1939/SPN/FMI support. Category selection alone does not establish these capabilities.
